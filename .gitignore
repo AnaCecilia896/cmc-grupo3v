@@ -1,0 +1,31 @@
+# Ignora TUDO por padrão — vamos commitar só o que precisa pra rodar relatorio_semanal
+*
+
+# Permite o essencial:
+!.gitignore
+!.streamlit/
+!.streamlit/config.toml
+!.streamlit/secrets.toml.example
+!README.md
+!relatorio_semanal.py
+!web_auth.py
+!config.py
+!requirements.txt
+
+# Banco com dados (commitado pra app funcionar em cloud read-only)
+!banco_central.db
+
+# Bloqueia secrets reais (mas o .example é commitado via whitelist acima)
+.streamlit/secrets.toml
+
+# Bloqueia arquivos sensíveis explicitamente (defesa em profundidade)
+credentials.json
+*.log
+*.bak
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+.claude/
+__pycache__/

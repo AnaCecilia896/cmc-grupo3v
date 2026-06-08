@@ -81,8 +81,22 @@ DRE_PLANILHAS = {
 
 DRE_ABA = "DRE"
 
-# Planilhas mensais por unidade (novo formato: CONTAGEM + COMPRAS + VENDAS por semana)
-# Compartilhar com o service account em credentials.json
+# Planilhas mensais por unidade (novo formato: CONTAGENS + COMPRAS + VENDAS)
+# Pasta Google Drive: https://drive.google.com/drive/folders/1uDzktpe5Cu9gL785cw87oc1AHVqpQEZX
+# IDs dos arquivos xlsx de maio/2026 (pasta 05.26):
+DRIVE_FOLDER_ID = "1uDzktpe5Cu9gL785cw87oc1AHVqpQEZX"
+XLSX_MENSAIS = {
+    "2026-05": {
+        "asa-norte":    "1obP1S2PWpikE1MTVbIlICeGo0dhIjVtz",  # 05.26 - Cantucci Asa Norte.xlsx
+        "asa-sul":      "1k4c6yKClSUio0askECm11qv58aep5eur",  # 05.26 - Cantucci Asa Sul.xlsx
+        "aguas-claras": "1rNey0_QLo5a8TodIeXbg1TGKLap-U5Tl",  # 05.26 - Cantucci Aguas Claras.xlsx
+        "koji":         "1Cnn2Ht4NUPlGqH0iUoelv3hblAdbuFnu",  # 05.26 - Koji.xlsx
+        "spq-norte":    "1YtrW7ydCCavxsYLO_IyyRxf4ZLJg7Za5",  # 05.26 - SPQ Norte.xlsx
+        "mane":         "1T78kTduTcLkfcKVNB3TEa7AuMBOGBoTu",  # 05.26 - SPQ Mane.xlsx
+    },
+}
+
+# Planilhas mensais Google Sheets (formato antigo, Sheets nativo — mantido para retrocompatibilidade)
 PLANILHAS_MENSAIS = {
     "asa-norte": {
         "nome": "Asa Norte",

@@ -184,10 +184,21 @@ VI_SUBTXT   = "#6b5e52"   # texto secundário nas caixas
 VI_BORDA    = "#2e4a5a"   # bordas e divisores
 VI_BRANCO   = "#e8dfc8"   # texto sobre fundo escuro
 VI_SECAO    = "#b0a898"   # cabeçalho de seção (sobre fundo escuro)
-COR_BOM     = "#9fb982"   # verde-sálvia (bom)
-COR_ATENC   = "#df931b"   # âmbar (atenção)
-COR_CRIT    = "#98092b"   # vermelho-escuro (crítico)
+COR_BOM     = "#9fb982"   # verde-sálvia (bom)   — para bordas/ícones em fundo escuro
+COR_ATENC   = "#df931b"   # âmbar (atenção)      — para bordas/ícones em fundo escuro
+COR_CRIT    = "#98092b"   # vermelho-escuro       — para bordas/ícones em fundo escuro
 COR_TRI     = "#e0daa3"   # trigo (destaque neutro)
+
+# Versões escuras para TEXTO em fundo claro (cards creme) — garante contraste WCAG AA
+COR_BOM_TXT   = "#2a6b3c"   # verde escuro — texto "bom" sobre VI_CARD
+COR_ATENC_TXT = "#8a4e00"   # âmbar escuro — texto "atenção" sobre VI_CARD
+COR_CRIT_TXT  = "#7f0000"   # vermelho     — texto "crítico" sobre VI_CARD
+
+# Filtro SQL para excluir compras operacionais (não entram no CMC/CMV)
+_SQL_EXCL_OP = (
+    "AND NOT (UPPER(COALESCE(secao,'')) LIKE '%LIMPEZA%' "
+    "OR UPPER(COALESCE(secao,'')) LIKE '%FUNCIONARIO%')"
+)
 
 # Aliases mantidos por compatibilidade com resto do código
 AZUL_ESCURO = VI_FUNDO
@@ -455,10 +466,22 @@ def get_uid(slug):
 
 @st.cache_data(ttl=120)
 def get_periodos():
+    """
+    Retorna lista de períodos disponíveis (YYYY-MM), ordenada do mais recente ao mais antigo.
+    Inclui qualquer mês que tenha dados em cmv_resumo, compras ou vendas_produtos —
+    mesmo que o CMV ainda não tenha sido calculado (ex: mês atual sem 2 contagens ainda).
+    """
     db = conn()
-    rows = db.execute(
-        "SELECT DISTINCT periodo FROM cmv_resumo ORDER BY periodo DESC"
-    ).fetchall()
+    rows = db.execute("""
+        SELECT DISTINCT periodo FROM (
+            SELECT periodo                                    FROM cmv_resumo
+            UNION
+            SELECT strftime('%Y-%m', data)       AS periodo  FROM compras        WHERE data IS NOT NULL
+            UNION
+            SELECT strftime('%Y-%m', data_inicio) AS periodo FROM vendas_produtos WHERE data_inicio IS NOT NULL
+        )
+        ORDER BY periodo DESC
+    """).fetchall()
     db.close()
     return [r[0] for r in rows]
 
@@ -503,20 +526,20 @@ def load_compras_semana(uid, periodo):
         "WHERE unidade_id=? AND periodo=? ORDER BY data_inicio",
         db, params=[uid, periodo]
     )
-    # Compras efetivas (conferidas)
+    # Compras efetivas (conferidas) — excluindo categorias operacionais
     compras_conf = pd.read_sql(
-        "SELECT data, SUM(valor_total) as comp "
-        "FROM compras WHERE unidade_id=? AND strftime('%Y-%m', data)=? "
-        "AND valor_total>0 AND (status_pedido='conferido' OR status_pedido IS NULL) "
-        "GROUP BY data",
+        f"SELECT data, SUM(valor_total) as comp "
+        f"FROM compras WHERE unidade_id=? AND strftime('%Y-%m', data)=? "
+        f"AND valor_total>0 AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP} "
+        f"GROUP BY data",
         db, params=[uid, periodo]
     )
-    # Compras em trânsito
+    # Compras em trânsito — excluindo categorias operacionais
     compras_tran = pd.read_sql(
-        "SELECT data, SUM(valor_total) as em_transito "
-        "FROM compras WHERE unidade_id=? AND strftime('%Y-%m', data)=? "
-        "AND valor_total>0 AND status_pedido='em_transito' "
-        "GROUP BY data",
+        f"SELECT data, SUM(valor_total) as em_transito "
+        f"FROM compras WHERE unidade_id=? AND strftime('%Y-%m', data)=? "
+        f"AND valor_total>0 AND status_pedido='em_transito' {_SQL_EXCL_OP} "
+        f"GROUP BY data",
         db, params=[uid, periodo]
     )
     db.close()
@@ -553,12 +576,12 @@ def load_top_produtos(uid, periodo, n=15):
 
 @st.cache_data(ttl=120)
 def load_compras_mes(uid, periodo):
-    """Retorna apenas compras CONFERIDAS (efetivas) do mês."""
+    """Retorna apenas compras CONFERIDAS (efetivas) do mês, excluindo categorias operacionais."""
     db = conn()
     df = pd.read_sql(
         "SELECT secao, nome_insumo, quantidade, valor_unitario, valor_total, fornecedor, data "
-        "FROM compras WHERE unidade_id=? AND strftime('%Y-%m', data)=? AND valor_total>0 "
-        "AND (status_pedido='conferido' OR status_pedido IS NULL) "
+        f"FROM compras WHERE unidade_id=? AND strftime('%Y-%m', data)=? AND valor_total>0 "
+        f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP} "
         "ORDER BY data, valor_total DESC",
         db, params=[uid, periodo]
     )
@@ -570,9 +593,9 @@ def load_em_transito_mes(uid, periodo) -> float:
     """Retorna o valor total em trânsito (realizado/confirmado, não conferido) do mês."""
     db = conn()
     r = db.execute(
-        "SELECT COALESCE(SUM(valor_total),0) FROM compras "
-        "WHERE unidade_id=? AND strftime('%Y-%m', data)=? "
-        "AND valor_total>0 AND status_pedido='em_transito'",
+        f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+        f"WHERE unidade_id=? AND strftime('%Y-%m', data)=? "
+        f"AND valor_total>0 AND status_pedido='em_transito' {_SQL_EXCL_OP}",
         (uid, periodo)
     ).fetchone()
     db.close()
@@ -608,15 +631,15 @@ def load_semana_kpis(uid, data_inicio, data_fim):
         (uid, data_inicio, data_fim)
     ).fetchone()
     comp_r = db.execute(
-        "SELECT COALESCE(SUM(valor_total),0) FROM compras "
-        "WHERE unidade_id=? AND data>=? AND data<=? AND valor_total>0 "
-        "AND (status_pedido='conferido' OR status_pedido IS NULL)",
+        f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+        f"WHERE unidade_id=? AND data>=? AND data<=? AND valor_total>0 "
+        f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP}",
         (uid, data_inicio, data_fim)
     ).fetchone()
     et_r = db.execute(
-        "SELECT COALESCE(SUM(valor_total),0) FROM compras "
-        "WHERE unidade_id=? AND data>=? AND data<=? AND valor_total>0 "
-        "AND status_pedido='em_transito'",
+        f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+        f"WHERE unidade_id=? AND data>=? AND data<=? AND valor_total>0 "
+        f"AND status_pedido='em_transito' {_SQL_EXCL_OP}",
         (uid, data_inicio, data_fim)
     ).fetchone()
     db.close()
@@ -647,6 +670,8 @@ def load_grupo_cmc(periodo: str) -> pd.DataFrame:
         FROM compras
         WHERE strftime('%Y-%m', data) = ?
           AND (status_pedido = 'conferido' OR status_pedido IS NULL)
+          AND NOT (UPPER(COALESCE(secao,'')) LIKE '%LIMPEZA%'
+               OR  UPPER(COALESCE(secao,'')) LIKE '%FUNCIONARIO%')
         GROUP BY unidade_id
     """, db, params=[periodo])
     db.close()
@@ -724,15 +749,15 @@ def load_quadro_compras(periodo: str,
 
         # ── Mês ────────────────────────────────────────────────────
         comp_mes = _q(
-            "SELECT COALESCE(SUM(valor_total),0) FROM compras "
-            "WHERE unidade_id=? AND strftime('%Y-%m',data)=? "
-            "AND (status_pedido='conferido' OR status_pedido IS NULL)",
+            f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+            f"WHERE unidade_id=? AND strftime('%Y-%m',data)=? "
+            f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP}",
             (uid_u, periodo))
 
         em_trans_mes = _q(
-            "SELECT COALESCE(SUM(valor_total),0) FROM compras "
-            "WHERE unidade_id=? AND strftime('%Y-%m',data)=? "
-            "AND status_pedido='em_transito'",
+            f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+            f"WHERE unidade_id=? AND strftime('%Y-%m',data)=? "
+            f"AND status_pedido='em_transito' {_SQL_EXCL_OP}",
             (uid_u, periodo))
 
         # Prefere linhas da API quando disponíveis (evita dupla contagem com dados do Sheets)
@@ -750,14 +775,14 @@ def load_quadro_compras(periodo: str,
         comp_sem = em_trans_sem = fat_sem = 0.0
         if semana_inicio and semana_fim:
             comp_sem = _q(
-                "SELECT COALESCE(SUM(valor_total),0) FROM compras "
-                "WHERE unidade_id=? AND data>=? AND data<=? "
-                "AND (status_pedido='conferido' OR status_pedido IS NULL)",
+                f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+                f"WHERE unidade_id=? AND data>=? AND data<=? "
+                f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP}",
                 (uid_u, semana_inicio, semana_fim))
             em_trans_sem = _q(
-                "SELECT COALESCE(SUM(valor_total),0) FROM compras "
-                "WHERE unidade_id=? AND data>=? AND data<=? "
-                "AND status_pedido='em_transito'",
+                f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+                f"WHERE unidade_id=? AND data>=? AND data<=? "
+                f"AND status_pedido='em_transito' {_SQL_EXCL_OP}",
                 (uid_u, semana_inicio, semana_fim))
             has_api_sem = _q(
                 "SELECT COUNT(*) FROM vendas_produtos "
@@ -807,14 +832,19 @@ def load_quadro_compras(periodo: str,
 
 
 @st.cache_data(ttl=120)
-def load_estoque_atual(uid):
-    """Último conjunto de contagens disponível com preço histórico."""
+def load_estoque_atual(uid, data_contagem: str = None):
+    """
+    Retorna estoque com preço histórico e cobertura de estoque.
+    data_contagem: se fornecido, usa essa contagem específica; caso contrário usa a mais recente.
+    """
     db = conn()
-    # Data mais recente
-    r = db.execute(
-        "SELECT MAX(data) FROM contagens WHERE unidade_id=?", (uid,)
-    ).fetchone()
-    data_ef = r[0] if r else None
+    if data_contagem:
+        data_ef = data_contagem
+    else:
+        r = db.execute(
+            "SELECT MAX(data) FROM contagens WHERE unidade_id=?", (uid,)
+        ).fetchone()
+        data_ef = r[0] if r else None
     if not data_ef:
         db.close()
         return pd.DataFrame(), data_ef
@@ -836,9 +866,28 @@ def load_estoque_atual(uid):
           AND ct.quantidade > 0
         ORDER BY valor_estoque DESC
     """, db, params=[uid, uid, data_ef])
+
+    # Consumo médio diário por insumo (últimos 30 dias de compras como proxy)
+    consumo_df = pd.read_sql("""
+        SELECT insumo_id,
+               SUM(quantidade) / 30.0 AS consumo_dia
+        FROM compras
+        WHERE unidade_id=?
+          AND data >= DATE(?, '-30 days')
+          AND quantidade > 0 AND valor_total > 0
+        GROUP BY insumo_id
+    """, db, params=[uid, data_ef])
     db.close()
 
-    # Normalizar seção via custo_medio lookup
+    df = df.merge(consumo_df, on="insumo_id", how="left")
+    # Cobertura em dias: estoque_atual / consumo_diário
+    df["cobertura_dias"] = df.apply(
+        lambda r: round(r["quantidade"] / r["consumo_dia"])
+        if (r.get("consumo_dia") or 0) > 0 else None,
+        axis=1,
+    )
+
+    # Normalizar seção via lookup de compras
     db2 = conn()
     sec_df = pd.read_sql(
         "SELECT insumo_id, MAX(secao) as secao FROM compras "
@@ -849,6 +898,85 @@ def load_estoque_atual(uid):
     df = df.merge(sec_df, on="insumo_id", how="left")
     df["secao_norm"] = df["secao"].fillna("Outros").apply(normalizar_secao)
     return df, data_ef
+
+
+@st.cache_data(ttl=120)
+def calcular_cmv_semana(uid: int, data_ini: str, data_fim: str,
+                        ei_data: str, ef_data: str) -> dict:
+    """
+    Calcula CMV para o período delimitado por duas contagens.
+    CMV = (EI + Compras_conferidas) - EF
+    CMV% = CMV / Faturamento * 100
+
+    Retorna dict com: ei, ef, compras, cmv_valor, faturamento, cmv_pct, ok
+    """
+    db = conn()
+
+    def _stock_value(data_contagem):
+        """Calcula valor do estoque em uma data de contagem."""
+        rows = db.execute("""
+            SELECT ct.insumo_id, ct.quantidade,
+                   COALESCE(p.cm, 0) AS custo_medio
+            FROM contagens ct
+            LEFT JOIN (
+                SELECT insumo_id,
+                       SUM(valor_total) / NULLIF(SUM(quantidade), 0) AS cm
+                FROM compras
+                WHERE unidade_id=? AND valor_total > 0 AND quantidade > 0
+                GROUP BY insumo_id
+            ) p ON p.insumo_id = ct.insumo_id
+            WHERE ct.unidade_id=? AND ct.data=? AND ct.quantidade > 0
+        """, (uid, uid, data_contagem)).fetchall()
+        return sum(float(r[1]) * float(r[2]) for r in rows)
+
+    ei_val = _stock_value(ei_data)
+    ef_val = _stock_value(ef_data) if ef_data else 0.0
+
+    # Compras conferidas no período (excluindo categorias operacionais)
+    comp_r = db.execute(
+        f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+        f"WHERE unidade_id=? AND data>=? AND data<=? AND valor_total>0 "
+        f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP}",
+        (uid, data_ini, data_fim)
+    ).fetchone()
+    compras = float(comp_r[0]) if comp_r else 0.0
+
+    # Faturamento do período:
+    # As linhas de vendas_produtos podem ter datas diferentes das semanas de contagem.
+    # Usamos proração: valor × (dias de sobreposição / total de dias da linha).
+    has_api = db.execute(
+        "SELECT COUNT(*) FROM vendas_produtos "
+        "WHERE unidade_id=? AND periodo=? AND produto='Faturamento (API)'",
+        (uid, data_ini[:7])
+    ).fetchone()[0] > 0
+    fat_filter = "AND produto='Faturamento (API)'" if has_api else "AND produto!='Faturamento (API)'"
+    fat_rows = db.execute(
+        f"SELECT valor_total, data_inicio, data_fim FROM vendas_produtos "
+        f"WHERE unidade_id=? AND tipo='VENDA' {fat_filter} "
+        f"AND data_inicio <= ? AND data_fim >= ?",
+        (uid, data_fim, data_ini)
+    ).fetchall()
+    fat = 0.0
+    for val, di, df in fat_rows:
+        # dias de sobreposição entre a linha e nosso período
+        overlap_ini = max(di, data_ini)
+        overlap_fim = min(df, data_fim)
+        from datetime import date as _d
+        ovlp = (_d.fromisoformat(overlap_fim) - _d.fromisoformat(overlap_ini)).days + 1
+        total = (_d.fromisoformat(df) - _d.fromisoformat(di)).days + 1
+        if ovlp > 0 and total > 0:
+            fat += float(val or 0) * ovlp / total
+    db.close()
+
+    cmv_val = ei_val + compras - ef_val
+    cmv_pct = cmv_val / fat * 100 if fat > 0 else 0.0
+
+    return {
+        "ei": ei_val, "ef": ef_val, "compras": compras,
+        "cmv_valor": cmv_val, "faturamento": fat,
+        "cmv_pct": cmv_pct,
+        "ok": ef_data is not None and fat > 0,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -910,15 +1038,18 @@ with c_titulo:
 
     if _em_andamento:
         _badge_txt   = "🔄 Atualizando…"
-        _badge_color = COR_ATENC
+        _badge_bg    = COR_ATENC          # cor de fundo/borda (pode ser suave)
+        _badge_fc    = COR_ATENC_TXT      # cor do texto (escura, contraste no card claro)
     elif _fim_ts:
         _badge_txt   = f"✅ Atualizado {_fmt_timestamp(_fim_ts)}"
-        _badge_color = COR_BOM if _ok else COR_CRIT
+        _badge_bg    = COR_BOM if _ok else COR_CRIT
+        _badge_fc    = COR_BOM_TXT if _ok else COR_CRIT_TXT
         if _duracao:
             _badge_txt += f" ({_duracao:.0f}s)"
     else:
         _badge_txt   = "⚪ Sem dados de atualização"
-        _badge_color = VI_SECAO
+        _badge_bg    = VI_SECAO
+        _badge_fc    = VI_SUBTXT
 
     st.markdown(f"""
     <div class="header-bar">
@@ -926,8 +1057,8 @@ with c_titulo:
       <div style="flex:1">
         <div class="header-title">Relatório Semanal</div>
         <div class="header-sub">Grupo Cantucci &nbsp;
-          <span style="font-size:.75rem;background:{_badge_color}22;color:{_badge_color};
-                       border:1px solid {_badge_color}55;padding:2px 8px;border-radius:10px;
+          <span style="font-size:.75rem;background:{_badge_bg}22;color:{_badge_fc};
+                       border:1px solid {_badge_bg}88;padding:2px 8px;border-radius:10px;
                        font-weight:600;">{_badge_txt}</span>
         </div>
       </div>
@@ -958,50 +1089,76 @@ _meta_cmc  = META_CMC_GRUPO.get(SLUG_SEL, META_CMC)
 
 # Semanas disponíveis — carregadas após uid
 @st.cache_data(ttl=120)
-def get_semanas_periodo(uid, periodo):
-    db = conn()
-    # Prefere semanas de linhas API quando disponíveis
-    has_api = db.execute(
-        "SELECT COUNT(*) FROM vendas_produtos WHERE unidade_id=? AND periodo=? AND produto='Faturamento (API)'",
-        (uid, periodo)
-    ).fetchone()[0] > 0
-    filtro = "AND produto='Faturamento (API)'" if has_api else ""
-    rows = db.execute(
-        f"SELECT DISTINCT data_inicio, data_fim FROM vendas_produtos "
-        f"WHERE unidade_id=? AND periodo=? AND tipo='VENDA' {filtro} ORDER BY data_inicio",
-        (uid, periodo)
-    ).fetchall()
-    db.close()
-    return rows
+def get_semanas_contagem(uid, periodo):
+    """
+    Retorna lista de semanas definidas por pares de contagens.
+    Cada semana = (data_inicio, data_fim, ei_data, ef_data)
+      - data_inicio : primeiro dia do período (= ei_data)
+      - data_fim    : último dia antes da próxima contagem (= ef_data - 1 dia)
+      - ei_data     : data da contagem de abertura (EI)
+      - ef_data     : data da contagem de fechamento (EF), None se semana ainda aberta
 
-semanas_raw = get_semanas_periodo(uid, periodo)
-semana_opts = ["Todas as semanas"] + [
-    f"S{i+1}  {datetime.strptime(r[0],'%Y-%m-%d').strftime('%d/%m')} – {datetime.strptime(r[1],'%Y-%m-%d').strftime('%d/%m')}"
-    for i, r in enumerate(semanas_raw)
-]
+    A primeira semana do mês pode usar a última contagem do mês anterior como EI.
+    """
+    from datetime import timedelta as _td
+    db = conn()
+    ano, mes = int(periodo[:4]), int(periodo[5:7])
+
+    # Última contagem do mês anterior (possível EI da S1)
+    mes_ant = f"{ano}-{mes-1:02d}" if mes > 1 else f"{ano-1}-12"
+    ei_ant = db.execute(
+        "SELECT MAX(data) FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=?",
+        (uid, mes_ant)
+    ).fetchone()[0]
+
+    # Todas as contagens do período atual
+    datas_mes = [r[0] for r in db.execute(
+        "SELECT DISTINCT data FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=? "
+        "ORDER BY data",
+        (uid, periodo)
+    ).fetchall()]
+    db.close()
+
+    # Monta lista de pontos de contagem: [ei_anterior?] + datas do mês
+    todos = []
+    if ei_ant:
+        todos.append(ei_ant)
+    todos.extend(datas_mes)
+
+    if len(todos) < 2:
+        return []   # sem pares suficientes para definir semanas
+
+    semanas = []
+    for i in range(len(todos) - 1):
+        ei = todos[i]
+        ef = todos[i + 1]
+        data_ini = ei
+        data_fim = (date.fromisoformat(ef) - timedelta(days=1)).isoformat()
+        semanas.append((data_ini, data_fim, ei, ef))
+
+    # Semana aberta: depois da última contagem (EF=None)
+    ultima = todos[-1]
+    hoje = date.today().isoformat()
+    if ultima <= hoje:
+        semanas.append((ultima, hoje, ultima, None))
+
+    return semanas
+
+
+# ─── Semanas por contagem ──────────────────────────────────────────────────────
+semanas_raw = get_semanas_contagem(uid, periodo)
+
+def _label_semana(i, s):
+    ei_str  = datetime.strptime(s[0], "%Y-%m-%d").strftime("%d/%m")
+    fim_str = datetime.strptime(s[1], "%Y-%m-%d").strftime("%d/%m")
+    fechada = "✓" if s[3] else "→"  # EF disponível = semana fechada
+    return f"S{i+1}  {ei_str} – {fim_str} {fechada}"
+
+semana_opts = ["Todas as semanas"] + [_label_semana(i, s) for i, s in enumerate(semanas_raw)]
 
 with c_semana:
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
     semana_sel = st.selectbox("Semana", options=semana_opts)
-
-# ── Botões de atualização ────────────────────────────────────────────────────
-_col_btn1, _col_btn2, _col_spacer = st.columns([1, 1.3, 4])
-
-with _col_btn1:
-    if _em_andamento:
-        st.button("🔄 Atualizando…", disabled=True, use_container_width=True)
-    elif st.button("⚡ Faturamento", use_container_width=True,
-                   help="Atualiza só o faturamento (API cantuccidados) — ~30s"):
-        if _rodar_atualizacao(apenas_faturamento=True):
-            st.toast("Atualização de faturamento iniciada!", icon="⚡")
-            st.rerun()
-
-with _col_btn2:
-    if not _em_andamento and st.button("🔃 Tudo (VMarket + Fat.)", use_container_width=True,
-                                        help="Atualiza compras VMarket + faturamento + CMV — ~3min"):
-        if _rodar_atualizacao(apenas_faturamento=False):
-            st.toast("Atualização completa iniciada! Pode levar alguns minutos.", icon="🔃")
-            st.rerun()
 
 # Auto-refresh enquanto atualização está em andamento
 if _em_andamento:
@@ -1013,8 +1170,9 @@ if _em_andamento:
 st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
 # Índice da semana selecionada (None = todas)
-semana_idx = semana_opts.index(semana_sel) - 1  # -1 = "todas"
-semana_filtro = semanas_raw[semana_idx] if semana_idx >= 0 else None  # (data_inicio, data_fim)
+# semana_filtro = (data_inicio, data_fim, ei_data, ef_data)  ← 4-tupla
+semana_idx    = semana_opts.index(semana_sel) - 1  # -1 = "todas"
+semana_filtro = semanas_raw[semana_idx] if semana_idx >= 0 else None
 
 # ── Carregar dados ─────────────────────────────────────────────────────────────
 
@@ -1023,21 +1181,34 @@ df_fat_sem   = load_fat_semanal(uid, periodo)
 df_comp_sem  = load_compras_semana(uid, periodo)
 df_top       = load_top_produtos(uid, periodo)
 df_compras   = load_compras_mes(uid, periodo)
-df_estoque, data_estoque = load_estoque_atual(uid)
 em_transito_mes = load_em_transito_mes(uid, periodo)
+
+# Estoque: usa a contagem de fechamento da semana selecionada (ef_data),
+# ou a contagem mais recente quando nenhuma semana é selecionada
+_ef_data_estoque = semana_filtro[3] if (semana_filtro and semana_filtro[3]) else None
+df_estoque, data_estoque = load_estoque_atual(uid, _ef_data_estoque)
 
 # Aplicar filtro semanal nos dados de produtos e compras
 if semana_filtro:
-    df_top_display     = load_top_produtos_semana(uid, semana_filtro[0], semana_filtro[1])
+    _si, _sf = semana_filtro[0], semana_filtro[1]
+    df_top_display     = load_top_produtos_semana(uid, _si, _sf)
     df_compras_display = df_compras[
-        (df_compras["data"] >= semana_filtro[0]) &
-        (df_compras["data"] <= semana_filtro[1])
+        (df_compras["data"] >= _si) &
+        (df_compras["data"] <= _sf)
     ].copy()
-    kpis_sem = load_semana_kpis(uid, semana_filtro[0], semana_filtro[1])
+    kpis_sem = load_semana_kpis(uid, _si, _sf)
+
+    # CMV semanal: calcula apenas se a semana está fechada (ef_data disponível)
+    _ei, _ef = semana_filtro[2], semana_filtro[3]
+    if _ef:
+        cmv_sem = calcular_cmv_semana(uid, _si, _sf, _ei, _ef)
+    else:
+        cmv_sem = None   # semana aberta, CMV não calculável ainda
 else:
     df_top_display     = df_top
     df_compras_display = df_compras
-    kpis_sem = None
+    kpis_sem  = None
+    cmv_sem   = None
 
 # Linha TOTAL do CMV
 total = df_cmv[df_cmv["categoria"] == "TOTAL"]
@@ -1256,7 +1427,7 @@ else:
         desvio_r  = r["desvio"]
         base_r    = proj_r if proj_r > 0 else r["fat_mes"]
 
-        proj_cell = (f'<td style="text-align:right;color:#8ecaf7;">R$ {proj_r:,.0f}</td>'
+        proj_cell = (f'<td style="text-align:right;color:#1a5276;">R$ {proj_r:,.0f}</td>'
                      if proj_r > 0
                      else '<td style="text-align:right;color:#aaa;font-style:italic">—</td>')
         meta_cell = (f'<td style="text-align:right;color:#2a6b3c;">R$ {meta_v:,.0f}</td>'
@@ -1297,7 +1468,7 @@ else:
     tot_dev_badge  = _badge_dev(tot_dev if base_grupo > 0 else None, base_grupo)
     tot_meta_str   = f"R$ {tot_meta:,.0f}" if base_grupo > 0 else '<span style="color:#aaa">—</span>'
     tot_fat_str    = f"R$ {tot_fat:,.0f}" if tot_fat > 0 else '<span style="color:#aaa">—</span>'
-    tot_proj_str   = f'<td style="text-align:right;color:#8ecaf7;font-weight:700;">R$ {tot_proj:,.0f}</td>' if _tem_projecao else '<td style="text-align:right;color:#aaa">—</td>'
+    tot_proj_str   = f'<td style="text-align:right;color:#1a5276;font-weight:700;">R$ {tot_proj:,.0f}</td>' if _tem_projecao else '<td style="text-align:right;color:#aaa">—</td>'
 
     rows_html += f"""
         <tr style="border-top:2px solid #ccc;background:#e8e3d2;font-weight:700;">
@@ -1373,8 +1544,14 @@ if kpis_sem and semana_filtro:
     _fat_kpi  = kpis_sem["fat"]
     _comp_kpi = kpis_sem["comp"]
     _et_kpi   = kpis_sem["em_transito"]
-    _cmv_kpi  = 0.0   # CMV não disponível por semana (precisa de contagem)
     _cmc_kpi  = _comp_kpi / _fat_kpi * 100 if _fat_kpi > 0 else 0.0
+    # CMV semanal: usa cálculo EI/EF da semana; fallback para mensal se aberta
+    if cmv_sem and cmv_sem["ok"]:
+        _cmv_kpi      = cmv_sem["cmv_pct"]
+        _cmv_sem_ok   = True
+    else:
+        _cmv_kpi      = cmv_pct    # fallback: CMV mensal
+        _cmv_sem_ok   = False
     _periodo_label = semana_sel
     _escopo = "semana"
 else:
@@ -1383,6 +1560,7 @@ else:
     _et_kpi   = em_transito_mes
     _cmv_kpi  = cmv_pct
     _cmc_kpi  = cmc_pct
+    _cmv_sem_ok = False
     _periodo_label = datetime.strptime(periodo, "%Y-%m").strftime("%B / %Y").title()
     _escopo = "mes"
 
@@ -1393,13 +1571,29 @@ secao(f"📌 Indicadores — {_unid_label} · {_periodo_label}  "
 c1, c2, c3, c4 = st.columns(4)
 
 with c1:
-    if _escopo == "mes" and has_cmv:
-        kpi("CMV Realizado", f"{_cmv_kpi:.1f}%", f"{META_CMV:.1f}%",
-            _cls_cmv(_cmv_kpi), _delta(_cmv_kpi, cmv_pct_ant))
+    if _escopo == "semana" and cmv_sem:
+        if cmv_sem["ok"]:
+            # CMV calculado pela contagem da semana
+            _det = (f'EI R${cmv_sem["ei"]:,.0f} + Comp R${cmv_sem["compras"]:,.0f}'
+                    f' − EF R${cmv_sem["ef"]:,.0f}')
+            kpi("CMV Semana",
+                f"{_cmv_kpi:.1f}%",
+                f"Meta: {META_CMV:.1f}%",
+                _cls_cmv(_cmv_kpi),
+                f'<span style="font-size:.70rem;color:{VI_SUBTXT};">{_det}</span>')
+        else:
+            # Semana aberta: sem contagem de fechamento
+            kpi("CMV Semana", "—", f"Meta: {META_CMV:.1f}%", "cinza",
+                '<span style="font-size:.72rem;color:#888">Semana aberta — aguarda próxima contagem</span>')
+    elif has_cmv:
+        kpi("CMV Realizado",
+            f"{_cmv_kpi:.1f}%",
+            f"Meta: {META_CMV:.1f}%",
+            _cls_cmv(_cmv_kpi),
+            _delta(_cmv_kpi, cmv_pct_ant))
     else:
-        kpi("CMV Realizado", "—" if _escopo == "semana" else f"{_cmv_kpi:.1f}%",
-            f"{META_CMV:.1f}%", "cinza" if _escopo == "semana" else _cls_cmv(_cmv_kpi),
-            '<span style="font-size:.72rem;color:#888">CMV calculado apenas mensal</span>' if _escopo == "semana" else "")
+        kpi("CMV Realizado", "—", f"Meta: {META_CMV:.1f}%", "cinza",
+            '<span style="font-size:.72rem;color:#888">Necessita 2 contagens no mês</span>')
 
 with c2:
     _cls_c = _cls_cmc(_cmc_kpi)
@@ -1558,8 +1752,11 @@ else:
             })
 
         for row in rows:
+            # cor_val: borda e ícones (pode ser a cor suave original)
             cor_val = COR_CRIT if row["cmc_pct"] > META_CMC + 3 else (COR_ATENC if row["cmc_pct"] > META_CMC else COR_BOM)
-            cor_dev = COR_CRIT if row["desvio"] > 0 else COR_BOM
+            # cor_val_txt / cor_dev_txt: texto em fundo claro → versões escuras para contraste WCAG
+            cor_val_txt = COR_CRIT_TXT if row["cmc_pct"] > META_CMC + 3 else (COR_ATENC_TXT if row["cmc_pct"] > META_CMC else COR_BOM_TXT)
+            cor_dev = COR_CRIT_TXT if row["desvio"] > 0 else COR_BOM_TXT
             et      = row["em_transito"]
             et_html = (
                 f'<span style="grid-column:1/-1;font-size:.72rem;color:{COR_ATENC};'
@@ -1576,7 +1773,7 @@ else:
                 f'<span style="color:{VI_TEXTO};font-weight:700;font-size:.95rem;">{row["sem"]}'
                 f'<span style="font-size:.78rem;font-weight:400;color:{VI_SUBTXT};margin-left:6px;">'
                 f'{row["periodo"]}</span></span>'
-                f'<span style="color:{cor_val};font-weight:800;font-size:1.05rem;">'
+                f'<span style="color:{cor_val_txt};font-weight:800;font-size:1.05rem;">'
                 f'CMC {row["cmc_pct"]:.1f}%</span></div>'
                 f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:.82rem;">'
                 f'<span style="color:{VI_SUBTXT};">Faturamento</span>'
@@ -1767,15 +1964,33 @@ else:
 
     # Tabela classe A
     df_a = df_e[df_e["classe"] == "A"].head(20).copy()
-    df_a_show = df_a[["nome", "secao_norm", "quantidade", "custo_medio", "valor_estoque", "pct"]].copy()
-    df_a_show.columns = ["Produto", "Categoria", "Qtd", "Custo Unit.", "Valor (R$)", "% Estoque"]
-    df_a_show["Custo Unit."] = df_a_show["Custo Unit."].map("R$ {:.2f}".format)
-    df_a_show["Valor (R$)"]  = df_a_show["Valor (R$)"].map("R$ {:,.0f}".format)
-    df_a_show["% Estoque"]   = df_a_show["% Estoque"].map("{:.1f}%".format)
-    df_a_show["Qtd"]         = df_a_show["Qtd"].map("{:.1f}".format)
+    df_a_show = df_a[["nome", "secao_norm", "quantidade", "custo_medio",
+                       "valor_estoque", "pct", "cobertura_dias"]].copy()
+    df_a_show.columns = ["Produto", "Categoria", "Qtd", "Custo Unit.",
+                          "Valor (R$)", "% Estoque", "Capital Parado"]
+    df_a_show["Custo Unit."]  = df_a_show["Custo Unit."].map("R$ {:.2f}".format)
+    df_a_show["Valor (R$)"]   = df_a_show["Valor (R$)"].map("R$ {:,.0f}".format)
+    df_a_show["% Estoque"]    = df_a_show["% Estoque"].map("{:.1f}%".format)
+    df_a_show["Qtd"]          = df_a_show["Qtd"].map("{:.1f}".format)
+
+    def _fmt_cobertura(dias):
+        if dias is None or (isinstance(dias, float) and dias != dias):
+            return "—"
+        d = int(dias)
+        if d <= 7:   return f"⚠ {d}d"    # estoque baixo
+        if d <= 21:  return f"✔ {d}d"    # normal
+        return f"🔴 {d}d"                # capital parado excessivo
+
+    df_a_show["Capital Parado"] = df_a_show["Capital Parado"].apply(_fmt_cobertura)
 
     with st.expander(f"📋 Produtos Classe A — top {len(df_a)} itens de maior valor em estoque", expanded=True):
         st.dataframe(df_a_show, use_container_width=True, hide_index=True)
+        st.markdown(
+            f'<div style="font-size:11px;color:{VI_SECAO};margin-top:4px;">'
+            f'Capital Parado = dias de estoque cobrindo o consumo médio dos últimos 30 dias &nbsp;|&nbsp; '
+            f'⚠ &lt; 7 dias &nbsp; ✔ 7–21 dias &nbsp; 🔴 &gt; 21 dias (excesso de capital imobilizado)'
+            f'</div>', unsafe_allow_html=True
+        )
 
 # ════════════════════════════════════════════════════════════════════════════
 # BLOCO 6 — Lista de Compras (detalhada, colapsável)

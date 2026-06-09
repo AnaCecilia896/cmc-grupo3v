@@ -1066,9 +1066,17 @@ with c_titulo:
 
 with c_unidade:
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-    nome_sel = st.selectbox("Unidade", options=_nomes_unidade,
-                            index=_nomes_unidade.index(_slug_para_nome.get(_SLUG_DEFAULT, _nomes_unidade[0])))
-    SLUG_SEL = _nome_para_slug[nome_sel]
+    _unit_lock = st.session_state.get("unit_lock")
+    if _unit_lock and _unit_lock in _slug_para_nome:
+        # Acesso por senha de unidade — trava a seleção
+        SLUG_SEL = _unit_lock
+        _nome_locked = _slug_para_nome[SLUG_SEL]
+        st.text_input("Unidade", value=f"🔒 {_nome_locked}", disabled=True,
+                      help="Acesso restrito a esta unidade. Use a senha master pra ver todas.")
+    else:
+        nome_sel = st.selectbox("Unidade", options=_nomes_unidade,
+                                index=_nomes_unidade.index(_slug_para_nome.get(_SLUG_DEFAULT, _nomes_unidade[0])))
+        SLUG_SEL = _nome_para_slug[nome_sel]
 
 with c_periodo:
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)

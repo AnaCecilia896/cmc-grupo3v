@@ -20,12 +20,17 @@ ATLAS_ANON_KEY     = (
 )
 ATLAS_EMAIL    = "cmv@cantucci.com.br"
 ATLAS_PASSWORD = "cmv54321"
-# Mapeamento slug banco → restaurant_id no Atlas
+# Mapeamento slug banco → restaurant_id no Atlas (todos os 6 restaurantes)
 ATLAS_RESTAURANTES = {
-    "aguas-claras": "55ebe96c-183e-4c1c-8cf9-922b4cbac2ab",  # Italiano Aguas Claras
-    "spq-norte":    "ff7d3f8f-4e9a-43f9-83d1-4470692a04f8",  # Superquadra Norte
-    "koji":         "bb307d5d-cec9-4c49-b504-0212d5e57a83",  # Koji
+    "asa-norte":    "2bf2fbd4-c468-4be2-b035-e5cca1729f66",  # Italiano Norte (IAN)
+    "asa-sul":      "d1f2f156-04f3-4b43-9507-2609058d1a4b",  # Italiano Sul (IAS)
+    "aguas-claras": "55ebe96c-183e-4c1c-8cf9-922b4cbac2ab",  # Italiano Aguas Claras (IAC)
+    "spq-norte":    "ff7d3f8f-4e9a-43f9-83d1-4470692a04f8",  # Superquadra Norte (SQN)
+    "koji":         "bb307d5d-cec9-4c49-b504-0212d5e57a83",  # Koji (KOJ)
+    "mane":         "e7b5e491-5eb5-4444-8be0-231a5f1a2f4b",  # Mané Brasília (MANE)
 }
+# Apenas as unidades cujas COMPRAS vêm do Atlas (as demais usam VMarket)
+ATLAS_COMPRAS_SLUGS = ["aguas-claras", "spq-norte", "koji"]
 
 # Mapeamento slug DB → id(s) de loja na API (autenticar com form encoding em /auth/login)
 # str = loja única; list[str] = múltiplas lojas somadas (ex: Mané)

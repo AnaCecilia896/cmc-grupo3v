@@ -603,14 +603,19 @@ def load_em_transito_mes(uid, periodo) -> float:
 
 @st.cache_data(ttl=120)
 def load_top_produtos_semana(uid, data_inicio, data_fim, n=15):
-    """Top produtos para uma semana específica (por data_inicio/data_fim exatos)."""
+    """
+    Top produtos para uma semana específica.
+    Usa overlap de datas (data_inicio armazenada <= data_fim selecionado
+    E data_fim armazenada >= data_inicio selecionado) para tolerar pequenas
+    diferenças entre semanas calendário e semanas de contagem.
+    """
     db = conn()
     df = pd.read_sql(
         "SELECT produto, SUM(valor_total) as fat, SUM(quantidade) as qtd "
         "FROM vendas_produtos WHERE unidade_id=? AND tipo='VENDA' "
-        "AND data_inicio=? AND data_fim=? AND produto!='Faturamento (API)' "
+        "AND data_inicio <= ? AND data_fim >= ? AND produto!='Faturamento (API)' "
         "GROUP BY produto ORDER BY fat DESC LIMIT ?",
-        db, params=[uid, data_inicio, data_fim, n]
+        db, params=[uid, data_fim, data_inicio, n]
     )
     db.close()
     return df
@@ -720,6 +725,34 @@ def load_projecao_mensal(periodo: str) -> dict:
     }
 
 
+def _semanas_mes(periodo: str) -> tuple[int, int]:
+    """
+    Retorna (semanas_decorridas, semanas_total) para o período YYYY-MM.
+
+    Semanas seguem o padrão Seg→Dom.
+    semanas_decorridas = semanas que JÁ COMEÇARAM (incluindo a semana atual parcial).
+    semanas_total      = total de semanas Seg→Dom no mês (incluindo parciais no início/fim).
+    """
+    import calendar as _cal
+    from datetime import date as _d, timedelta as _td
+    ano, mes = int(periodo[:4]), int(periodo[5:7])
+    primeiro = _d(ano, mes, 1)
+    ultimo   = _d(ano, mes, _cal.monthrange(ano, mes)[1])
+    hoje     = _d.today()
+
+    dec = total = 0
+    ini = primeiro
+    while ini <= ultimo:
+        dias_ate_dom = (6 - ini.weekday()) % 7
+        fim_sem = min(ini + _td(days=dias_ate_dom), ultimo)
+        total += 1
+        if ini <= hoje:
+            dec += 1
+        ini = fim_sem + _td(days=1)
+
+    return max(dec, 1), max(total, 1)
+
+
 @st.cache_data(ttl=120)
 def load_quadro_compras(periodo: str,
                         semana_inicio: str = None,
@@ -729,8 +762,9 @@ def load_quadro_compras(periodo: str,
     Inclui dados mensais e (opcionalmente) semanais.
     Colunas: nome, slug, fat_mes, comp_mes, em_trans_mes, cmc_mes,
              comp_sem, em_trans_sem, fat_sem, cmc_sem,
-             meta, meta_val, desvio,
-             projecao, meta_val_proj, desvio_proj  ← novos
+             meta, meta_val, meta_val_fat,
+             desvio, tendencia, semanas_dec, semanas_total,
+             projecao
     """
     db  = conn()
     proj_dict = load_projecao_mensal(periodo)   # {slug: {...}}
@@ -801,28 +835,32 @@ def load_quadro_compras(periodo: str,
         meta_vendas  = proj_info.get("meta_vendas", 0.0)
 
         # Meta de compras = 28% da projeção do mês todo
-        # Fallback: se não há projeção, usa faturamento real
-        base_meta    = projecao if projecao > 0 else fat_mes
+        base_meta     = projecao if projecao > 0 else fat_mes
         meta_val_proj = base_meta * meta_pct / 100
-        desvio_proj  = (comp_mes - meta_val_proj) if base_meta > 0 else None
 
-        # CMC% calculado sobre faturamento real (como antes)
-        cmc_mes  = (comp_mes  / fat_mes  * 100) if fat_mes  > 0 else None
-        cmc_sem  = (comp_sem  / fat_sem  * 100) if fat_sem  > 0 else None
+        # CMC% calculado sobre faturamento real
+        cmc_mes  = (comp_mes / fat_mes * 100) if fat_mes > 0 else None
+        cmc_sem  = (comp_sem / fat_sem * 100) if fat_sem > 0 else None
 
-        # meta_val legacy (sobre fat_mes) — mantido para compatibilidade
-        meta_val = fat_mes * meta_pct / 100
-        desvio   = (comp_mes - meta_val) if fat_mes > 0 else None
+        # ── Tendência e desvio ───────────────────────────────────────
+        # Tendência = (compras_acumuladas / semanas_decorridas) * semanas_total
+        # Desvio    = Tendência − meta_val  (+ = estourará; − = dentro da meta)
+        sem_dec, sem_total = _semanas_mes(periodo)
+        tendencia = (comp_mes / sem_dec) * sem_total if comp_mes > 0 else 0.0
+        desvio    = tendencia - meta_val_proj
+
+        # Meta legacy (sobre fat_mes) — compatibilidade
+        meta_val  = fat_mes * meta_pct / 100
 
         rows.append({
             "nome": nome_u, "slug": slug_u,
             "fat_mes": fat_mes, "comp_mes": comp_mes, "em_trans_mes": em_trans_mes,
             "cmc_mes": cmc_mes, "meta": meta_pct,
-            # Meta baseada na projeção (nova) — usada nos alertas de status
-            "meta_val": meta_val_proj, "desvio": desvio_proj,
+            "meta_val": meta_val_proj, "desvio": desvio,
+            "tendencia": tendencia,
+            "semanas_dec": sem_dec, "semanas_total": sem_total,
             "projecao": projecao, "meta_vendas": meta_vendas,
-            # Meta legacy sobre faturamento real
-            "meta_val_fat": meta_val, "desvio_fat": desvio,
+            "meta_val_fat": meta_val,
             "comp_sem": comp_sem, "em_trans_sem": em_trans_sem,
             "fat_sem": fat_sem, "cmc_sem": cmc_sem,
         })
@@ -879,6 +917,9 @@ def load_estoque_atual(uid, data_contagem: str = None):
     """, db, params=[uid, data_ef])
     db.close()
 
+    # Garante tipos compatíveis antes do merge (Atlas pode ter insumo_id NULL → object)
+    df["insumo_id"]         = pd.to_numeric(df["insumo_id"],         errors="coerce").astype("Int64")
+    consumo_df["insumo_id"] = pd.to_numeric(consumo_df["insumo_id"], errors="coerce").astype("Int64")
     df = df.merge(consumo_df, on="insumo_id", how="left")
     # Cobertura em dias: estoque_atual / consumo_diário
     df["cobertura_dias"] = df.apply(
@@ -895,6 +936,7 @@ def load_estoque_atual(uid, data_contagem: str = None):
         db2, params=[uid]
     )
     db2.close()
+    sec_df["insumo_id"] = pd.to_numeric(sec_df["insumo_id"], errors="coerce").astype("Int64")
     df = df.merge(sec_df, on="insumo_id", how="left")
     df["secao_norm"] = df["secao"].fillna("Outros").apply(normalizar_secao)
     return df, data_ef
@@ -1112,16 +1154,18 @@ def get_semanas_contagem(uid, periodo):
     db = conn()
     ano, mes = int(periodo[:4]), int(periodo[5:7])
 
-    # Última contagem do mês anterior (possível EI da S1)
+    # Última contagem SEMANAL do mês anterior (possível EI da S1)
     mes_ant = f"{ano}-{mes-1:02d}" if mes > 1 else f"{ano-1}-12"
     ei_ant = db.execute(
-        "SELECT MAX(data) FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=?",
+        "SELECT MAX(data) FROM contagens "
+        "WHERE unidade_id=? AND strftime('%Y-%m',data)=? AND tipo='semanal'",
         (uid, mes_ant)
     ).fetchone()[0]
 
-    # Todas as contagens do período atual
+    # Contagens SEMANAIS do período atual (ignora inventarios e contagens rápidas)
     datas_mes = [r[0] for r in db.execute(
-        "SELECT DISTINCT data FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=? "
+        "SELECT DISTINCT data FROM contagens "
+        "WHERE unidade_id=? AND strftime('%Y-%m',data)=? AND tipo='semanal' "
         "ORDER BY data",
         (uid, periodo)
     ).fetchall()]
@@ -1326,6 +1370,10 @@ else:
     tot_meta   = df_quad["meta_val"].sum()         # 28% da projeção (ou fat se sem proj)
     base_grupo = tot_proj if tot_proj > 0 else tot_fat
     tot_dev    = tot_comp - tot_meta if base_grupo > 0 else 0.0
+    # Tendência total do grupo e desvio para a coluna da tabela
+    # desvio por unidade = tendencia − meta_val → tot_tend_dev = tot_tend − tot_meta
+    tot_tend     = df_quad["tendencia"].sum() if "tendencia" in df_quad.columns else tot_comp
+    tot_tend_dev = (tot_tend - tot_meta)      if base_grupo > 0              else 0.0
 
     tot_comp_s = df_quad["comp_sem"].sum()
     tot_fat_s  = df_quad["fat_sem"].sum()
@@ -1402,14 +1450,21 @@ else:
         return (f'<span style="background:{bg};color:{fc};font-weight:700;'
                 f'padding:2px 8px;border-radius:12px;font-size:12px;">{cmc:.1f}%</span>')
 
-    def _badge_dev(desvio, base):
-        """desvio = comp_mes − meta_proj; base = projeção (ou fat se sem proj)"""
-        if desvio is None or base <= 0:
+    def _badge_dev(desvio, tendencia, meta_val):
+        """
+        desvio  = tendencia − meta_val
+        negativo = tendência abaixo da meta (bom → verde)
+        positivo = tendência acima da meta (ruim → amarelo/vermelho)
+        """
+        if desvio is None:
             return '<span style="color:#aaa;font-style:italic">—</span>'
-        pct = abs(desvio) / base * 100
-        if desvio <= 0:  fc = "#1b5e20"; sinal = "▼"
-        elif pct <= 3:   fc = "#7d4e00"; sinal = "▲"
-        else:            fc = "#7f0000"; sinal = "▲"
+        if meta_val > 0:
+            excesso_pct = desvio / meta_val * 100
+        else:
+            excesso_pct = 0
+        if desvio <= 0:         fc, sinal = "#1b5e20", "▼"
+        elif excesso_pct <= 5:  fc, sinal = "#7d4e00", "▲"
+        else:                   fc, sinal = "#7f0000", "▲"
         return f'<span style="color:{fc};font-weight:700;">{sinal} R$ {abs(desvio):,.0f}</span>'
 
     def _status_icon_proj(comp, meta_val, base):
@@ -1460,7 +1515,7 @@ else:
           <td style="text-align:right;">R$ {r['comp_mes']:,.0f}{et_badge}</td>
           <td style="text-align:center;">{_badge_cmc(r['cmc_mes'], r['meta'])}</td>
           {meta_cell}
-          <td style="text-align:right;">{_badge_dev(desvio_r, base_r)}</td>
+          <td style="text-align:right;">{_badge_dev(desvio_r, r["tendencia"], meta_v)}</td>
           <td style="text-align:center;font-size:16px;">{_status_icon_proj(r['comp_mes'], meta_v, base_r)}</td>
         </tr>"""
 
@@ -1473,7 +1528,7 @@ else:
           <td style="text-align:center;">{tot_cmc_s_badge}</td>"""
 
     tot_cmc_badge  = _badge_cmc(tot_cmc if tot_fat > 0 else None, 28.0)
-    tot_dev_badge  = _badge_dev(tot_dev if base_grupo > 0 else None, base_grupo)
+    tot_dev_badge  = _badge_dev(tot_tend_dev if base_grupo > 0 else None, tot_tend, tot_meta)
     tot_meta_str   = f"R$ {tot_meta:,.0f}" if base_grupo > 0 else '<span style="color:#aaa">—</span>'
     tot_fat_str    = f"R$ {tot_fat:,.0f}" if tot_fat > 0 else '<span style="color:#aaa">—</span>'
     tot_proj_str   = f'<td style="text-align:right;color:#1a5276;font-weight:700;">R$ {tot_proj:,.0f}</td>' if _tem_projecao else '<td style="text-align:right;color:#aaa">—</td>'

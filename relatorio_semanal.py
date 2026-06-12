@@ -1627,7 +1627,7 @@ else:
     _periodo_label = datetime.strptime(periodo, "%Y-%m").strftime("%B / %Y").title()
     _escopo = "mes"
 
-_unid_label = nome_sel
+_unid_label = _nome_locked if (_unit_lock and _unit_lock in _slug_para_nome) else nome_sel
 secao(f"📌 Indicadores — {_unid_label} · {_periodo_label}  "
       f"<span title='{fat_fonte_tip}' style='font-size:.75rem;font-weight:400;opacity:.8;cursor:help'>{fat_fonte}</span>")
 

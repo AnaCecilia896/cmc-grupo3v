@@ -1141,58 +1141,53 @@ _meta_cmc  = META_CMC_GRUPO.get(SLUG_SEL, META_CMC)
 @st.cache_data(ttl=120)
 def get_semanas_contagem(uid, periodo):
     """
-    Retorna lista de semanas definidas por pares de contagens.
+    Retorna lista de semanas calendário (segunda→domingo) dentro do período.
     Cada semana = (data_inicio, data_fim, ei_data, ef_data)
-      - data_inicio : primeiro dia do período (= ei_data)
-      - data_fim    : último dia antes da próxima contagem (= ef_data - 1 dia)
-      - ei_data     : data da contagem de abertura (EI)
-      - ef_data     : data da contagem de fechamento (EF), None se semana ainda aberta
-
-    A primeira semana do mês pode usar a última contagem do mês anterior como EI.
+      - data_inicio : segunda-feira da semana (ou dia 1 se o mês não começa na segunda)
+      - data_fim    : domingo da semana, fim do mês ou hoje (o menor)
+      - ei_data     : última contagem semanal na data_inicio ou antes
+      - ef_data     : primeira contagem semanal após data_fim (None = semana ainda aberta)
     """
-    from datetime import timedelta as _td
     db = conn()
     ano, mes = int(periodo[:4]), int(periodo[5:7])
+    primeiro  = date(ano, mes, 1)
+    ultimo    = date(ano, mes, calendar.monthrange(ano, mes)[1])
+    hoje_date = date.today()
 
-    # Última contagem SEMANAL do mês anterior (possível EI da S1)
-    mes_ant = f"{ano}-{mes-1:02d}" if mes > 1 else f"{ano-1}-12"
-    ei_ant = db.execute(
-        "SELECT MAX(data) FROM contagens "
-        "WHERE unidade_id=? AND strftime('%Y-%m',data)=? AND tipo='semanal'",
-        (uid, mes_ant)
-    ).fetchone()[0]
-
-    # Contagens SEMANAIS do período atual (ignora inventarios e contagens rápidas)
-    datas_mes = [r[0] for r in db.execute(
+    # Contagens semanais do mês anterior + atual + próximo (para encontrar ei/ef)
+    mes_ant  = f"{ano}-{mes-1:02d}" if mes > 1 else f"{ano-1}-12"
+    mes_prox = f"{ano}-{mes+1:02d}" if mes < 12 else f"{ano+1}-01"
+    rows = db.execute(
         "SELECT DISTINCT data FROM contagens "
-        "WHERE unidade_id=? AND strftime('%Y-%m',data)=? AND tipo='semanal' "
+        "WHERE unidade_id=? AND strftime('%Y-%m',data) IN (?,?,?) AND tipo='semanal' "
         "ORDER BY data",
-        (uid, periodo)
-    ).fetchall()]
+        (uid, mes_ant, periodo, mes_prox)
+    ).fetchall()
     db.close()
-
-    # Monta lista de pontos de contagem: [ei_anterior?] + datas do mês
-    todos = []
-    if ei_ant:
-        todos.append(ei_ant)
-    todos.extend(datas_mes)
-
-    if len(todos) < 2:
-        return []   # sem pares suficientes para definir semanas
+    todas_contagens = [r[0] for r in rows]
 
     semanas = []
-    for i in range(len(todos) - 1):
-        ei = todos[i]
-        ef = todos[i + 1]
-        data_ini = ei
-        data_fim = (date.fromisoformat(ef) - timedelta(days=1)).isoformat()
-        semanas.append((data_ini, data_fim, ei, ef))
+    ini = primeiro
+    while ini <= min(ultimo, hoje_date):
+        # Fim da semana = próximo domingo, respeitando fim do mês e hoje
+        dias_ate_dom = (6 - ini.weekday()) % 7
+        fim = min(ini + timedelta(days=dias_ate_dom), ultimo, hoje_date)
+        ini_str = ini.isoformat()
+        fim_str = fim.isoformat()
 
-    # Semana aberta: depois da última contagem (EF=None)
-    ultima = todos[-1]
-    hoje = date.today().isoformat()
-    if ultima <= hoje:
-        semanas.append((ultima, hoje, ultima, None))
+        # ei_data: última contagem na data de início ou antes
+        ei_data = next((c for c in reversed(todas_contagens) if c <= ini_str), None)
+
+        # ef_data: primeira contagem APÓS o fim desta semana (indica semana fechada)
+        ef_data = None
+        if fim < hoje_date:
+            for c in todas_contagens:
+                if c > fim_str:
+                    ef_data = c
+                    break
+
+        semanas.append((ini_str, fim_str, ei_data, ef_data))
+        ini = fim + timedelta(days=1)
 
     return semanas
 

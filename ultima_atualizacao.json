@@ -1,89 +1,10 @@
 {
-  "inicio": "2026-06-12 16:00:04",
-  "pid": 29040,
+  "inicio": "2026-06-15 10:59:51",
+  "pid": 12660,
   "periodos": [
     "2026-06",
     "2026-05"
   ],
-  "em_andamento": false,
-  "periodos_detalhes": {
-    "2026-06": {
-      "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-12 16:00:18"
-      },
-      "atlas": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-12 16:00:28"
-      },
-      "contagens": {
-        "ok": false,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [
-          "aguas-claras"
-        ],
-        "timestamp": "2026-06-12 16:00:54"
-      },
-      "faturamento": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-06-12 16:01:03"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 1751,
-        "timestamp": "2026-06-12 16:01:23"
-      },
-      "cmv": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-06-12 16:01:30"
-      }
-    },
-    "2026-05": {
-      "vmarket": {
-        "ok": 1,
-        "erros": [
-          "asa-norte",
-          "asa-sul"
-        ],
-        "timestamp": "2026-06-12 16:01:48"
-      },
-      "atlas": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-12 16:02:11"
-      },
-      "contagens": {
-        "ok": true,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [],
-        "timestamp": "2026-06-12 16:03:55"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-06-12 16:05:10"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 4496,
-        "timestamp": "2026-06-12 16:06:08"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-06-12 16:06:13"
-      }
-    }
-  },
-  "git_push": {
-    "ok": true,
-    "timestamp": "2026-06-12 16:06:20"
-  },
-  "fim": "2026-06-12 16:06:20",
-  "duracao_segundos": 376.6,
-  "sucesso": false
+  "em_andamento": true,
+  "periodos_detalhes": {}
 }

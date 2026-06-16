@@ -1,84 +1,10 @@
 {
-  "inicio": "2026-06-16 10:00:05",
-  "pid": 14332,
+  "inicio": "2026-06-16 19:00:06",
+  "pid": 13732,
   "periodos": [
     "2026-06",
     "2026-05"
   ],
-  "em_andamento": false,
-  "periodos_detalhes": {
-    "2026-06": {
-      "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-16 10:00:18"
-      },
-      "atlas": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-16 10:00:31"
-      },
-      "contagens": {
-        "ok": true,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [],
-        "timestamp": "2026-06-16 10:01:28"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-06-16 10:02:00"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 2241,
-        "timestamp": "2026-06-16 10:02:46"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-06-16 10:02:48"
-      }
-    },
-    "2026-05": {
-      "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-16 10:02:59"
-      },
-      "atlas": {
-        "ok": 2,
-        "erros": [
-          "aguas-claras"
-        ],
-        "timestamp": "2026-06-16 10:03:31"
-      },
-      "contagens": {
-        "ok": true,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [],
-        "timestamp": "2026-06-16 10:06:28"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-06-16 10:07:43"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 4496,
-        "timestamp": "2026-06-16 10:08:45"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-06-16 10:08:51"
-      }
-    }
-  },
-  "git_push": {
-    "ok": true,
-    "timestamp": "2026-06-16 10:09:03"
-  },
-  "fim": "2026-06-16 10:09:03",
-  "duracao_segundos": 538.7,
-  "sucesso": true
+  "em_andamento": true,
+  "periodos_detalhes": {}
 }

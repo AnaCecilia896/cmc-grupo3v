@@ -1,84 +1,10 @@
 {
-  "inicio": "2026-06-18 16:27:08",
-  "pid": 31160,
+  "inicio": "2026-06-18 19:00:05",
+  "pid": 1896,
   "periodos": [
     "2026-06",
     "2026-05"
   ],
-  "em_andamento": false,
-  "periodos_detalhes": {
-    "2026-06": {
-      "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-18 16:27:31"
-      },
-      "atlas": {
-        "ok": 4,
-        "erros": [],
-        "timestamp": "2026-06-18 16:27:51"
-      },
-      "contagens": {
-        "ok": true,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [],
-        "timestamp": "2026-06-18 16:28:42"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-06-18 16:29:15"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 2577,
-        "timestamp": "2026-06-18 16:29:47"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-06-18 16:29:49"
-      }
-    },
-    "2026-05": {
-      "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-18 16:30:00"
-      },
-      "atlas": {
-        "ok": 4,
-        "erros": [],
-        "timestamp": "2026-06-18 16:30:19"
-      },
-      "contagens": {
-        "ok": false,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [
-          "spq-norte"
-        ],
-        "timestamp": "2026-06-18 16:31:59"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-06-18 16:32:52"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 4496,
-        "timestamp": "2026-06-18 16:33:41"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-06-18 16:33:45"
-      }
-    }
-  },
-  "git_push": {
-    "ok": true,
-    "timestamp": "2026-06-18 16:33:55"
-  },
-  "fim": "2026-06-18 16:33:55",
-  "duracao_segundos": 407.1,
-  "sucesso": false
+  "em_andamento": true,
+  "periodos_detalhes": {}
 }

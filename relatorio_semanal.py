@@ -194,10 +194,15 @@ COR_BOM_TXT   = "#2a6b3c"   # verde escuro — texto "bom" sobre VI_CARD
 COR_ATENC_TXT = "#8a4e00"   # âmbar escuro — texto "atenção" sobre VI_CARD
 COR_CRIT_TXT  = "#7f0000"   # vermelho     — texto "crítico" sobre VI_CARD
 
-# Filtro SQL para excluir compras operacionais (não entram no CMC/CMV)
+# Filtro SQL para excluir compras operacionais (não entram no CMC/CMV).
+# Cobre variantes VMarket (ASCII). Itens acentuados do Atlas ("Alimentação Funcionários")
+# são capturados via Python em normalizar_secao() / calcular_cmv.py.
 _SQL_EXCL_OP = (
     "AND NOT (UPPER(COALESCE(secao,'')) LIKE '%LIMPEZA%' "
-    "OR UPPER(COALESCE(secao,'')) LIKE '%FUNCIONARIO%')"
+    "OR UPPER(COALESCE(secao,'')) LIKE '%FUNCIONARIO%' "
+    "OR UPPER(COALESCE(secao,'')) LIKE '%USO INTERNO%' "
+    "OR UPPER(COALESCE(secao,'')) LIKE '%USO MENSAL%' "
+    "OR UPPER(COALESCE(secao,'')) LIKE '%CONSUMO INTERNO%')"
 )
 
 # Aliases mantidos por compatibilidade com resto do código
@@ -441,7 +446,7 @@ def normalizar_secao(s):
         (["DESCARTAVEL"],"Descartáveis"),
         (["EMBALAGEM"],"Embalagens"),
         (["MATERIAL DE LIMPEZA","LIMPEZA"],"Mat. Limpeza"),
-        (["ALIMENTACAO FUNCIONARIO","USO INTERNO","USO MENSAL"],"Uso Interno"),
+        (["ALIMENTACAO FUNCIONARIO","USO INTERNO","USO MENSAL","CONSUMO INTERNO"],"Uso Interno"),
     ]
     for kws, cat in MAP:
         if any(kw in n for kw in kws): return cat
@@ -653,6 +658,31 @@ def load_semana_kpis(uid, data_inicio, data_fim):
         "comp":         float(comp_r[0]) if comp_r else 0.0,
         "em_transito":  float(et_r[0]) if et_r else 0.0,
     }
+
+@st.cache_data(ttl=120)
+def load_compras_op(uid, data_ini, data_fim):
+    """Retorna compras de Material de Limpeza e Alimentação Funcionários no período."""
+    db = conn()
+    rows = db.execute("""
+        SELECT secao, COALESCE(SUM(valor_total), 0) as total
+        FROM compras
+        WHERE unidade_id=? AND data>=? AND data<=?
+          AND (status_pedido='conferido' OR status_pedido IS NULL)
+          AND valor_total > 0
+          AND secao IS NOT NULL AND secao != ''
+        GROUP BY secao
+    """, (uid, data_ini, data_fim)).fetchall()
+    db.close()
+    limpeza     = 0.0
+    uso_interno = 0.0
+    for sec, tot in rows:
+        cat = normalizar_secao(sec)
+        if cat == "Mat. Limpeza":
+            limpeza     += float(tot or 0)
+        elif cat == "Uso Interno":
+            uso_interno += float(tot or 0)
+    return {"limpeza": limpeza, "uso_interno": uso_interno}
+
 
 @st.cache_data(ttl=120)
 def load_grupo_cmc(periodo: str) -> pd.DataFrame:
@@ -1705,6 +1735,45 @@ with c4:
         _fonte_proj = "Cantucci API (base histórica 90d)" if _usa_proj_api else "Estimativa linear"
         kpi("Projeção p/ fim do mês", f"R$ {fat_proj:,.0f}", _fonte_proj,
             "atencao", "")
+
+# ── Custos Operacionais (excluídos do CMV e CMC) ─────────────────────────────
+_ano_op, _mes_op = int(periodo[:4]), int(periodo[5:7])
+_op_ini = f"{periodo}-01"
+_op_fim = f"{periodo}-{calendar.monthrange(_ano_op, _mes_op)[1]:02d}"
+if semana_filtro:
+    _op_ini = semana_filtro[0]
+    _op_fim = semana_filtro[1]
+
+_ops = load_compras_op(uid, _op_ini, _op_fim)
+_op_limp  = _ops["limpeza"]
+_op_uso   = _ops["uso_interno"]
+_op_total = _op_limp + _op_uso
+
+if _op_total > 0:
+    _escopo_label = semana_sel if semana_filtro else datetime.strptime(periodo, "%Y-%m").strftime("%B/%Y").title()
+    st.markdown(f"""
+    <div style="background:{VI_CARD};border-radius:10px;padding:14px 18px;
+                border-left:4px solid #6c757d;margin-top:14px;">
+      <div style="font-size:.72rem;font-weight:700;color:{VI_SUBTXT};
+                  text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;">
+        📋 Custos Operacionais — excluídos do CMV e CMC &nbsp;·&nbsp;
+        <span style="font-weight:400">{_escopo_label}</span>
+      </div>
+      <div style="display:flex;gap:28px;align-items:center;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:.7rem;color:{VI_SUBTXT}">Mat. de Limpeza</div>
+          <div style="font-size:1.25rem;font-weight:700;color:{VI_TEXTO}">R$ {_op_limp:,.0f}</div>
+        </div>
+        <div>
+          <div style="font-size:.7rem;color:{VI_SUBTXT}">Alim. Funcionários</div>
+          <div style="font-size:1.25rem;font-weight:700;color:{VI_TEXTO}">R$ {_op_uso:,.0f}</div>
+        </div>
+        <div style="border-left:1px solid {VI_BORDA};padding-left:20px;">
+          <div style="font-size:.7rem;color:{VI_SUBTXT}">Total operacional</div>
+          <div style="font-size:1.35rem;font-weight:800;color:#6c757d">R$ {_op_total:,.0f}</div>
+        </div>
+      </div>
+    </div>""", unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════════════
 # BLOCO 2 — Faturamento Semanal

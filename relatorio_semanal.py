@@ -2024,26 +2024,27 @@ with col_comp:
         df_compras_display["secao_norm"] = df_compras_display["secao"].fillna("Outros").apply(normalizar_secao)
         comp_cat = (df_compras_display.groupby("secao_norm")["valor_total"]
                     .sum().reset_index()
-                    .sort_values("valor_total", ascending=False))
-        comp_cat["pct"] = comp_cat["valor_total"] / comp_cat["valor_total"].sum() * 100
-
-        fig4 = px.pie(
-            comp_cat.head(10),
-            values="valor_total",
-            names="secao_norm",
-            hole=0.45,
-            color_discrete_sequence=[
-                COR_BOM, COR_ATENC, COR_CRIT, COR_TRI,
-                "#6b8f5e", "#b5720a", "#7a0622", "#c8ba7a",
-                "#4a7042", "#8a6500",
-            ],
+                    .sort_values("valor_total", ascending=True))
+        total_comp = comp_cat["valor_total"].sum()
+        comp_cat["label"] = comp_cat.apply(
+            lambda r: f"R$ {r['valor_total']:,.0f}  ({r['valor_total']/total_comp*100:.1f}%)", axis=1
         )
-        fig4.update_traces(textinfo="percent+label", textfont_size=10,
-                           textfont_color=VI_BRANCO)
+
+        fig4 = px.bar(
+            comp_cat,
+            x="valor_total",
+            y="secao_norm",
+            orientation="h",
+            color_discrete_sequence=[COR_BOM],
+            text="label",
+        )
+        fig4.update_traces(textposition="inside", textfont=dict(color=VI_TEXTO, size=10))
         fig4 = graf_layout(fig4, height=360)
         fig4.update_layout(
-            title=dict(text=f"Distribuição de compras — R$ {comp_cat['valor_total'].sum():,.0f} total",
+            title=dict(text=f"Compras por categoria — R$ {total_comp:,.0f} total",
                        font=dict(size=12)),
+            xaxis=dict(tickprefix="R$ "),
+            yaxis=dict(title=""),
             showlegend=False,
         )
         st.plotly_chart(fig4, use_container_width=True)

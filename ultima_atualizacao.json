@@ -1,82 +1,10 @@
 {
-  "inicio": "2026-06-19 10:00:03",
-  "pid": 26824,
+  "inicio": "2026-06-19 13:00:06",
+  "pid": 17924,
   "periodos": [
     "2026-06",
     "2026-05"
   ],
-  "em_andamento": false,
-  "periodos_detalhes": {
-    "2026-06": {
-      "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-19 10:00:14"
-      },
-      "atlas": {
-        "ok": 4,
-        "erros": [],
-        "timestamp": "2026-06-19 10:00:34"
-      },
-      "contagens": {
-        "ok": false,
-        "erro": "('Connection aborted.', ConnectionResetError(10054, 'Foi forçado o cancelamento de uma conexão existente pelo host remoto', None, 10054, None))",
-        "timestamp": "2026-06-19 10:01:31"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-06-19 10:02:03"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 2645,
-        "timestamp": "2026-06-19 10:02:55"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-06-19 10:02:57"
-      }
-    },
-    "2026-05": {
-      "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-19 10:03:08"
-      },
-      "atlas": {
-        "ok": 4,
-        "erros": [],
-        "timestamp": "2026-06-19 10:03:27"
-      },
-      "contagens": {
-        "ok": false,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [
-          "asa-sul"
-        ],
-        "timestamp": "2026-06-19 10:05:41"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-06-19 10:06:29"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 4496,
-        "timestamp": "2026-06-19 10:08:12"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-06-19 10:08:15"
-      }
-    }
-  },
-  "git_push": {
-    "ok": true,
-    "timestamp": "2026-06-19 10:08:27"
-  },
-  "fim": "2026-06-19 10:08:27",
-  "duracao_segundos": 503.6,
-  "sucesso": false
+  "em_andamento": true,
+  "periodos_detalhes": {}
 }

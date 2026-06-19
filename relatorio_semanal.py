@@ -199,10 +199,7 @@ COR_CRIT_TXT  = "#7f0000"   # vermelho     — texto "crítico" sobre VI_CARD
 # são capturados via Python em normalizar_secao() / calcular_cmv.py.
 _SQL_EXCL_OP = (
     "AND NOT (UPPER(COALESCE(secao,'')) LIKE '%LIMPEZA%' "
-    "OR UPPER(COALESCE(secao,'')) LIKE '%FUNCIONARIO%' "
-    "OR UPPER(COALESCE(secao,'')) LIKE '%USO INTERNO%' "
-    "OR UPPER(COALESCE(secao,'')) LIKE '%USO MENSAL%' "
-    "OR UPPER(COALESCE(secao,'')) LIKE '%CONSUMO INTERNO%')"
+    "OR UPPER(COALESCE(secao,'')) LIKE '%FUNCIONARIO%')"
 )
 
 # Aliases mantidos por compatibilidade com resto do código
@@ -446,7 +443,8 @@ def normalizar_secao(s):
         (["DESCARTAVEL"],"Descartáveis"),
         (["EMBALAGEM"],"Embalagens"),
         (["MATERIAL DE LIMPEZA","LIMPEZA"],"Mat. Limpeza"),
-        (["ALIMENTACAO FUNCIONARIO","USO INTERNO","USO MENSAL","CONSUMO INTERNO"],"Uso Interno"),
+        (["ALIMENTACAO FUNCIONARIO"],"Alim. Funcionarios"),
+        (["USO INTERNO","USO MENSAL","CONSUMO INTERNO"],"Uso Interno"),
     ]
     for kws, cat in MAP:
         if any(kw in n for kw in kws): return cat
@@ -679,7 +677,7 @@ def load_compras_op(uid, data_ini, data_fim):
         cat = normalizar_secao(sec)
         if cat == "Mat. Limpeza":
             limpeza     += float(tot or 0)
-        elif cat == "Uso Interno":
+        elif cat == "Alim. Funcionarios":
             uso_interno += float(tot or 0)
     return {"limpeza": limpeza, "uso_interno": uso_interno}
 

@@ -1,82 +1,29 @@
 {
-  "inicio": "2026-06-23 13:00:04",
-  "pid": 11016,
-  "periodos": [
-    "2026-06",
-    "2026-05"
-  ],
-  "em_andamento": false,
-  "periodos_detalhes": {
-    "2026-06": {
-      "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-23 13:00:15"
-      },
-      "atlas": {
-        "ok": 5,
-        "erros": [],
-        "timestamp": "2026-06-23 13:00:31"
-      },
-      "contagens": {
-        "ok": true,
-        "inseridos": 808,
-        "atualizados": 0,
-        "erros": [],
-        "timestamp": "2026-06-23 13:01:25"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-06-23 13:01:48"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 2942,
-        "timestamp": "2026-06-23 13:02:20"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-06-23 13:02:23"
-      }
+  "ultima_atualizacao": "2026-06-23 14:33:42",
+  "unidades": [
+    {
+      "slug": "aguas-claras",
+      "nome": "Aguas Claras"
     },
-    "2026-05": {
-      "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-23 13:02:32"
-      },
-      "atlas": {
-        "ok": 5,
-        "erros": [],
-        "timestamp": "2026-06-23 13:02:45"
-      },
-      "contagens": {
-        "ok": true,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [],
-        "timestamp": "2026-06-23 13:03:56"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-06-23 13:04:37"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 4496,
-        "timestamp": "2026-06-23 13:05:21"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-06-23 13:05:24"
-      }
+    {
+      "slug": "asa-norte",
+      "nome": "Asa Norte"
+    },
+    {
+      "slug": "asa-sul",
+      "nome": "Asa Sul"
+    },
+    {
+      "slug": "koji",
+      "nome": "Koji"
+    },
+    {
+      "slug": "mane",
+      "nome": "Mane"
+    },
+    {
+      "slug": "spq-norte",
+      "nome": "SPQ Norte"
     }
-  },
-  "git_push": {
-    "ok": true,
-    "timestamp": "2026-06-23 13:05:34"
-  },
-  "fim": "2026-06-23 13:05:34",
-  "duracao_segundos": 329.7,
-  "sucesso": true
+  ]
 }

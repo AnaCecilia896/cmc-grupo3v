@@ -1,83 +1,10 @@
 {
-  "inicio": "2026-06-22 16:00:04",
-  "pid": 6576,
+  "inicio": "2026-06-23 10:00:04",
+  "pid": 19320,
   "periodos": [
     "2026-06",
     "2026-05"
   ],
-  "em_andamento": false,
-  "periodos_detalhes": {
-    "2026-06": {
-      "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-22 16:00:16"
-      },
-      "atlas": {
-        "ok": 5,
-        "erros": [],
-        "timestamp": "2026-06-22 16:00:39"
-      },
-      "contagens": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-06-22 16:01:06"
-      },
-      "faturamento": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-06-22 16:01:22"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 2942,
-        "timestamp": "2026-06-22 16:02:05"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-06-22 16:02:12"
-      }
-    },
-    "2026-05": {
-      "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-22 16:02:23"
-      },
-      "atlas": {
-        "ok": 5,
-        "erros": [],
-        "timestamp": "2026-06-22 16:02:43"
-      },
-      "contagens": {
-        "ok": true,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [],
-        "timestamp": "2026-06-22 16:04:34"
-      },
-      "faturamento": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-06-22 16:04:53"
-      },
-      "produtos": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-06-22 16:05:03"
-      },
-      "cmv": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-06-22 16:05:11"
-      }
-    }
-  },
-  "git_push": {
-    "ok": true,
-    "timestamp": "2026-06-22 16:05:21"
-  },
-  "fim": "2026-06-22 16:05:21",
-  "duracao_segundos": 317.1,
-  "sucesso": false
+  "em_andamento": true,
+  "periodos_detalhes": {}
 }

@@ -3,8 +3,10 @@ Configurações do sistema CMV.
 Preencha PLANILHAS com os IDs das abas de cada unidade.
 """
 
-CREDENTIALS_FILE = "credentials.json"
-DB_FILE = "banco_central.db"
+import os as _os
+_BASE = _os.path.dirname(_os.path.abspath(__file__))
+CREDENTIALS_FILE = _os.path.join(_BASE, "credentials.json")
+DB_FILE = _os.path.join(_BASE, "banco_central.db")
 
 # API cantuccidados.com.br
 CANTUCCI_API  = "https://cantuccidados.com.br/api"

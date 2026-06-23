@@ -565,6 +565,39 @@ def load_compras_semana(uid, periodo):
     return pd.DataFrame(rows)
 
 @st.cache_data(ttl=120)
+def load_estoque_por_semana(uid: int, datas_inicio: tuple) -> dict:
+    """
+    Retorna {data_inicio: valor_estoque} para cada data em datas_inicio.
+    Usa a contagem do Atlas (tipo semanal/inventario_mensal) exatamente nessa data.
+    Valor = SUM(quantidade * custo_medio), onde custo_medio vem das compras da unidade.
+    Se não houver contagem na data, retorna 0.0.
+    """
+    db = conn()
+    custo = pd.read_sql(
+        "SELECT insumo_id, SUM(valor_total) / NULLIF(SUM(quantidade), 0) AS cm "
+        "FROM compras WHERE unidade_id=? AND valor_total > 0 AND quantidade > 0 "
+        "GROUP BY insumo_id",
+        db, params=[uid]
+    )
+    resultado = {}
+    for data in datas_inicio:
+        contagem = pd.read_sql(
+            "SELECT insumo_id, quantidade FROM contagens WHERE unidade_id=? AND data=?",
+            db, params=[uid, data]
+        )
+        if contagem.empty:
+            resultado[data] = 0.0
+            continue
+        contagem["insumo_id"] = pd.to_numeric(contagem["insumo_id"], errors="coerce").astype("Int64")
+        custo["insumo_id"]    = pd.to_numeric(custo["insumo_id"],    errors="coerce").astype("Int64")
+        merged = contagem.merge(custo, on="insumo_id", how="left")
+        merged["cm"] = merged["cm"].fillna(0)
+        resultado[data] = float((merged["quantidade"] * merged["cm"]).sum())
+    db.close()
+    return resultado
+
+
+@st.cache_data(ttl=120)
 def load_top_produtos(uid, periodo, n=15):
     db = conn()
     df = pd.read_sql(
@@ -971,6 +1004,39 @@ def load_estoque_atual(uid, data_contagem: str = None):
 
 
 @st.cache_data(ttl=120)
+def load_estoque_contagem_anterior(uid: int, data_atual: str) -> pd.DataFrame:
+    """
+    Retorna DataFrame {insumo_id, valor_estoque_ant} da contagem imediatamente anterior a data_atual.
+    Usa o mesmo cálculo de custo médio de load_estoque_atual.
+    Retorna DataFrame vazio se não houver contagem anterior.
+    """
+    db = conn()
+    row = db.execute(
+        "SELECT MAX(data) FROM contagens WHERE unidade_id=? AND data < ?",
+        (uid, data_atual)
+    ).fetchone()
+    data_ant = row[0] if row else None
+    if not data_ant:
+        db.close()
+        return pd.DataFrame(columns=["insumo_id", "valor_estoque_ant"])
+
+    df = pd.read_sql("""
+        SELECT ct.insumo_id,
+               ct.quantidade * COALESCE(p.cm, 0) AS valor_estoque_ant
+        FROM contagens ct
+        LEFT JOIN (
+            SELECT insumo_id, SUM(valor_total) / NULLIF(SUM(quantidade), 0) AS cm
+            FROM compras WHERE unidade_id=? AND valor_total > 0 AND quantidade > 0
+            GROUP BY insumo_id
+        ) p ON p.insumo_id = ct.insumo_id
+        WHERE ct.unidade_id=? AND ct.data=?
+    """, db, params=[uid, uid, data_ant])
+    db.close()
+    df["insumo_id"] = pd.to_numeric(df["insumo_id"], errors="coerce").astype("Int64")
+    return df
+
+
+@st.cache_data(ttl=120)
 def calcular_cmv_semana(uid: int, data_ini: str, data_fim: str,
                         ei_data: str, ef_data: str) -> dict:
     """
@@ -1254,6 +1320,8 @@ semana_filtro = semanas_raw[semana_idx] if semana_idx >= 0 else None
 df_cmv       = load_cmv_mes(uid, periodo)
 df_fat_sem   = load_fat_semanal(uid, periodo)
 df_comp_sem  = load_compras_semana(uid, periodo)
+_datas_inicio_sem = tuple(df_fat_sem["data_inicio"].tolist()) if not df_fat_sem.empty else ()
+estoque_por_semana = load_estoque_por_semana(uid, _datas_inicio_sem)
 df_top       = load_top_produtos(uid, periodo)
 df_compras   = load_compras_mes(uid, periodo)
 em_transito_mes = load_em_transito_mes(uid, periodo)
@@ -1262,6 +1330,7 @@ em_transito_mes = load_em_transito_mes(uid, periodo)
 # ou a contagem mais recente quando nenhuma semana é selecionada
 _ef_data_estoque = semana_filtro[3] if (semana_filtro and semana_filtro[3]) else None
 df_estoque, data_estoque = load_estoque_atual(uid, _ef_data_estoque)
+df_estoque_ant = load_estoque_contagem_anterior(uid, data_estoque) if data_estoque else pd.DataFrame(columns=["insumo_id", "valor_estoque_ant"])
 
 # Aplicar filtro semanal nos dados de produtos e compras
 if semana_filtro:
@@ -1864,16 +1933,18 @@ else:
             desvio  = r["comp"] - r["meta_comp"]
             sinal   = "+" if desvio >= 0 else "−"
             rows.append({
-                "sem":          r["semana"],
-                "periodo":      f"{datetime.strptime(r['data_inicio'],'%Y-%m-%d').strftime('%d/%m')} – {datetime.strptime(r['data_fim'],'%Y-%m-%d').strftime('%d/%m')}",
-                "fat":          r["fat"],
-                "comp":         r["comp"],
-                "em_transito":  float(r.get("em_transito", 0)),
-                "meta_comp":    r["meta_comp"],
-                "cmc_pct":      r["cmc_pct"],
-                "cor_cmc":      cor_cmc,
-                "desvio":       desvio,
-                "sinal":        sinal,
+                "sem":           r["semana"],
+                "periodo":       f"{datetime.strptime(r['data_inicio'],'%Y-%m-%d').strftime('%d/%m')} – {datetime.strptime(r['data_fim'],'%Y-%m-%d').strftime('%d/%m')}",
+                "fat":           r["fat"],
+                "comp":          r["comp"],
+                "em_transito":   float(r.get("em_transito", 0)),
+                "meta_comp":     r["meta_comp"],
+                "cmc_pct":       r["cmc_pct"],
+                "cor_cmc":       cor_cmc,
+                "desvio":        desvio,
+                "sinal":         sinal,
+                "estoque_ini":   estoque_por_semana.get(r["data_inicio"], 0.0),
+                "data_inicio":   r["data_inicio"],
             })
 
         for row in rows:
@@ -1903,6 +1974,13 @@ else:
                 f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:.82rem;">'
                 f'<span style="color:{VI_SUBTXT};">Faturamento</span>'
                 f'<span style="color:{VI_TEXTO};text-align:right;font-weight:600;">R$ {row["fat"]:,.0f}</span>'
+                + (
+                    f'<span style="color:{VI_SUBTXT};">Estoque inicial (contagem)</span>'
+                    f'<span style="color:{VI_TEXTO};text-align:right;font-weight:600;">R$ {row["estoque_ini"]:,.0f}</span>'
+                    if row["estoque_ini"] > 0 else
+                    f'<span style="color:{VI_SUBTXT};">Estoque inicial (contagem)</span>'
+                    f'<span style="color:#aaa;text-align:right;font-weight:500;font-style:italic;">R$ 0,00</span>'
+                ) +
                 f'<span style="color:{VI_SUBTXT};">Compras realizadas</span>'
                 f'<span style="color:#8a4e00;text-align:right;font-weight:600;">R$ {row["comp"]:,.0f}</span>'
                 + (f'<span style="grid-column:1/-1;font-size:.72rem;color:{COR_ATENC};'
@@ -2088,33 +2166,67 @@ else:
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-    # Tabela classe A
-    df_a = df_e[df_e["classe"] == "A"].head(20).copy()
-    df_a_show = df_a[["nome", "secao_norm", "quantidade", "custo_medio",
-                       "valor_estoque", "pct", "cobertura_dias"]].copy()
-    df_a_show.columns = ["Produto", "Categoria", "Qtd", "Custo Unit.",
-                          "Valor (R$)", "% Estoque", "Capital Parado"]
-    df_a_show["Custo Unit."]  = df_a_show["Custo Unit."].map("R$ {:.2f}".format)
-    df_a_show["Valor (R$)"]   = df_a_show["Valor (R$)"].map("R$ {:,.0f}".format)
-    df_a_show["% Estoque"]    = df_a_show["% Estoque"].map("{:.1f}%".format)
-    df_a_show["Qtd"]          = df_a_show["Qtd"].map("{:.1f}".format)
+    # Mescla variação vs contagem anterior
+    df_full = df_e.copy()
+    if not df_estoque_ant.empty:
+        df_full["insumo_id"] = pd.to_numeric(df_full["insumo_id"], errors="coerce").astype("Int64")
+        df_full = df_full.merge(df_estoque_ant, on="insumo_id", how="left")
+        df_full["valor_estoque_ant"] = df_full["valor_estoque_ant"].fillna(0)
+    else:
+        df_full["valor_estoque_ant"] = 0.0
+
+    df_full["delta_val"] = df_full["valor_estoque"] - df_full["valor_estoque_ant"]
+    df_full["delta_pct"] = df_full.apply(
+        lambda r: (r["delta_val"] / r["valor_estoque_ant"] * 100)
+        if r["valor_estoque_ant"] > 0 else None, axis=1
+    )
+
+    def _fmt_variacao(row):
+        if df_estoque_ant.empty:
+            return "—"
+        delta = row["delta_val"]
+        pct   = row["delta_pct"]
+        if pct is None:
+            sinal = "+" if delta >= 0 else ""
+            return f"{'↑' if delta >= 0 else '↓'} {sinal}R$ {abs(delta):,.0f} (novo)"
+        seta  = "↑" if delta >= 0 else "↓"
+        sinal = "+" if delta >= 0 else "−"
+        return f"{seta} {sinal}R$ {abs(delta):,.0f} ({abs(pct):.1f}%)"
 
     def _fmt_cobertura(dias):
         if dias is None or (isinstance(dias, float) and dias != dias):
             return "—"
         d = int(dias)
-        if d <= 7:   return f"⚠ {d}d"    # estoque baixo
-        if d <= 21:  return f"✔ {d}d"    # normal
-        return f"🔴 {d}d"                # capital parado excessivo
+        if d <= 7:   return f"⚠ {d}d"
+        if d <= 21:  return f"✔ {d}d"
+        return f"🔴 {d}d"
 
-    df_a_show["Capital Parado"] = df_a_show["Capital Parado"].apply(_fmt_cobertura)
+    df_full["Variação"] = df_full.apply(_fmt_variacao, axis=1)
+    df_full["Capital Parado"] = df_full["cobertura_dias"].apply(_fmt_cobertura)
 
-    with st.expander(f"📋 Produtos Classe A — top {len(df_a)} itens de maior valor em estoque", expanded=True):
-        st.dataframe(df_a_show, use_container_width=True, hide_index=True)
+    df_show = df_full[["nome", "secao_norm", "classe", "quantidade",
+                        "custo_medio", "valor_estoque", "Variação", "Capital Parado"]].copy()
+    df_show.columns = ["Produto", "Categoria", "Classe", "Qtd",
+                        "Custo Unit.", "Valor (R$)", "Variação vs anterior", "Capital Parado"]
+    df_show["Custo Unit."] = df_show["Custo Unit."].map("R$ {:.2f}".format)
+    df_show["Valor (R$)"]  = df_show["Valor (R$)"].map("R$ {:,.0f}".format)
+    df_show["Qtd"]         = df_show["Qtd"].map("{:.1f}".format)
+
+    n_a = len(df_e[df_e["classe"] == "A"])
+    n_b = len(df_e[df_e["classe"] == "B"])
+    n_c = len(df_e[df_e["classe"] == "C"])
+
+    with st.expander(
+        f"📋 Posição completa de estoque — {len(df_show)} itens  "
+        f"(A: {n_a}  ·  B: {n_b}  ·  C: {n_c})",
+        expanded=True
+    ):
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
         st.markdown(
             f'<div style="font-size:11px;color:{VI_SECAO};margin-top:4px;">'
             f'Capital Parado = dias de estoque cobrindo o consumo médio dos últimos 30 dias &nbsp;|&nbsp; '
-            f'⚠ &lt; 7 dias &nbsp; ✔ 7–21 dias &nbsp; 🔴 &gt; 21 dias (excesso de capital imobilizado)'
+            f'⚠ &lt; 7 dias &nbsp; ✔ 7–21 dias &nbsp; 🔴 &gt; 21 dias (excesso de capital imobilizado) &nbsp;|&nbsp; '
+            f'Variação calculada em relação à contagem imediatamente anterior'
             f'</div>', unsafe_allow_html=True
         )
 

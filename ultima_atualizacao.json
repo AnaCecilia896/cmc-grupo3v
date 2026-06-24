@@ -1,29 +1,10 @@
 {
-  "ultima_atualizacao": "2026-06-23 15:02:34",
-  "unidades": [
-    {
-      "slug": "aguas-claras",
-      "nome": "Aguas Claras"
-    },
-    {
-      "slug": "asa-norte",
-      "nome": "Asa Norte"
-    },
-    {
-      "slug": "asa-sul",
-      "nome": "Asa Sul"
-    },
-    {
-      "slug": "koji",
-      "nome": "Koji"
-    },
-    {
-      "slug": "mane",
-      "nome": "Mane"
-    },
-    {
-      "slug": "spq-norte",
-      "nome": "SPQ Norte"
-    }
-  ]
+  "inicio": "2026-06-24 10:33:44",
+  "pid": 11300,
+  "periodos": [
+    "2026-06",
+    "2026-05"
+  ],
+  "em_andamento": true,
+  "periodos_detalhes": {}
 }

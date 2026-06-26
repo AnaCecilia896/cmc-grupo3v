@@ -1,6 +1,6 @@
 {
   "inicio": "2026-06-26 16:00:05",
-  "pid": 7576,
+  "pid": 7176,
   "periodos": [
     "2026-06",
     "2026-05"
@@ -23,62 +23,71 @@
         "inseridos": 0,
         "atualizados": 0,
         "erros": [],
-        "timestamp": "2026-06-26 16:02:03"
+        "timestamp": "2026-06-26 16:02:04"
       },
       "faturamento": {
-        "ok": true,
-        "timestamp": "2026-06-26 16:02:58"
+        "ok": false,
+        "erro": "database is locked",
+        "timestamp": "2026-06-26 16:02:24"
       },
       "produtos": {
-        "ok": true,
-        "linhas": 3598,
-        "timestamp": "2026-06-26 16:03:40"
+        "ok": false,
+        "erro": "database is locked",
+        "timestamp": "2026-06-26 16:02:35"
       },
       "cmv": {
-        "ok": true,
-        "timestamp": "2026-06-26 16:03:51"
+        "ok": false,
+        "erro": "database is locked",
+        "timestamp": "2026-06-26 16:02:43"
       }
     },
     "2026-05": {
       "vmarket": {
-        "ok": 3,
-        "erros": [],
-        "timestamp": "2026-06-26 16:04:07"
+        "ok": 1,
+        "erros": [
+          "asa-sul",
+          "mane"
+        ],
+        "timestamp": "2026-06-26 16:03:00"
       },
       "atlas": {
-        "ok": 5,
-        "erros": [],
-        "timestamp": "2026-06-26 16:04:31"
+        "ok": 0,
+        "erros": [
+          "aguas-claras",
+          "asa-norte",
+          "asa-sul",
+          "spq-norte",
+          "koji"
+        ],
+        "timestamp": "2026-06-26 16:03:36"
       },
       "contagens": {
         "ok": true,
         "inseridos": 0,
         "atualizados": 0,
         "erros": [],
-        "timestamp": "2026-06-26 16:06:41"
+        "timestamp": "2026-06-26 16:05:39"
       },
       "faturamento": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-06-26 16:06:57"
+        "ok": true,
+        "timestamp": "2026-06-26 16:06:37"
       },
       "produtos": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-06-26 16:07:07"
+        "ok": true,
+        "linhas": 4496,
+        "timestamp": "2026-06-26 16:07:36"
       },
       "cmv": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-06-26 16:07:14"
+        "ok": true,
+        "timestamp": "2026-06-26 16:07:47"
       }
     }
   },
   "git_push": {
     "ok": true,
-    "timestamp": "2026-06-26 16:07:26"
+    "timestamp": "2026-06-26 16:07:57"
   },
-  "fim": "2026-06-26 16:07:26",
-  "duracao_segundos": 441.0,
+  "fim": "2026-06-26 16:07:57",
+  "duracao_segundos": 472.0,
   "sucesso": false
 }

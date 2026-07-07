@@ -4,6 +4,46 @@
   "periodos": [
     "2026-07"
   ],
-  "em_andamento": true,
-  "periodos_detalhes": {}
+  "em_andamento": false,
+  "periodos_detalhes": {
+    "2026-07": {
+      "vmarket": {
+        "ok": 3,
+        "erros": [],
+        "timestamp": "2026-07-07 11:32:06"
+      },
+      "atlas": {
+        "ok": 5,
+        "erros": [],
+        "timestamp": "2026-07-07 11:32:24"
+      },
+      "contagens": {
+        "ok": true,
+        "inseridos": 0,
+        "atualizados": 0,
+        "erros": [],
+        "timestamp": "2026-07-07 11:33:01"
+      },
+      "faturamento": {
+        "ok": true,
+        "timestamp": "2026-07-07 11:33:21"
+      },
+      "produtos": {
+        "ok": true,
+        "linhas": 1236,
+        "timestamp": "2026-07-07 11:33:43"
+      },
+      "cmv": {
+        "ok": true,
+        "timestamp": "2026-07-07 11:33:50"
+      }
+    }
+  },
+  "git_push": {
+    "ok": true,
+    "timestamp": "2026-07-07 11:34:03"
+  },
+  "fim": "2026-07-07 11:34:03",
+  "duracao_segundos": 128.3,
+  "sucesso": true
 }

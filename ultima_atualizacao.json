@@ -5,6 +5,90 @@
     "2026-07",
     "2026-06"
   ],
-  "em_andamento": true,
-  "periodos_detalhes": {}
+  "em_andamento": false,
+  "periodos_detalhes": {
+    "2026-07": {
+      "vmarket": {
+        "ok": 3,
+        "erros": [],
+        "timestamp": "2026-07-07 16:00:18"
+      },
+      "atlas": {
+        "ok": 5,
+        "erros": [],
+        "timestamp": "2026-07-07 16:00:37"
+      },
+      "contagens": {
+        "ok": true,
+        "inseridos": 0,
+        "atualizados": 0,
+        "erros": [],
+        "timestamp": "2026-07-07 16:01:09"
+      },
+      "faturamento": {
+        "ok": false,
+        "erro": "database is locked",
+        "timestamp": "2026-07-07 16:01:33"
+      },
+      "produtos": {
+        "ok": false,
+        "erro": "database is locked",
+        "timestamp": "2026-07-07 16:01:42"
+      },
+      "custos_receitas": {
+        "ok": true,
+        "calculados": 37,
+        "timestamp": "2026-07-07 16:01:46"
+      },
+      "cmv": {
+        "ok": true,
+        "timestamp": "2026-07-07 16:01:57"
+      }
+    },
+    "2026-06": {
+      "vmarket": {
+        "ok": 3,
+        "erros": [],
+        "timestamp": "2026-07-07 16:02:14"
+      },
+      "atlas": {
+        "ok": 5,
+        "erros": [],
+        "timestamp": "2026-07-07 16:02:35"
+      },
+      "contagens": {
+        "ok": true,
+        "inseridos": 0,
+        "atualizados": 0,
+        "erros": [],
+        "timestamp": "2026-07-07 16:03:45"
+      },
+      "faturamento": {
+        "ok": false,
+        "erro": "database is locked",
+        "timestamp": "2026-07-07 16:03:58"
+      },
+      "produtos": {
+        "ok": false,
+        "erro": "database is locked",
+        "timestamp": "2026-07-07 16:04:06"
+      },
+      "custos_receitas": {
+        "ok": true,
+        "calculados": 37,
+        "timestamp": "2026-07-07 16:04:14"
+      },
+      "cmv": {
+        "ok": true,
+        "timestamp": "2026-07-07 16:04:26"
+      }
+    }
+  },
+  "git_push": {
+    "ok": true,
+    "timestamp": "2026-07-07 16:04:37"
+  },
+  "fim": "2026-07-07 16:04:37",
+  "duracao_segundos": 271.3,
+  "sucesso": false
 }

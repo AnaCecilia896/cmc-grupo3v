@@ -416,12 +416,12 @@ def secao(titulo):
 def graf_layout(fig, height=300):
     fig.update_layout(
         paper_bgcolor=AZUL_CARD, plot_bgcolor=AZUL_CARD,
-        font=dict(color=BRANCO, size=12),
+        font=dict(color=VI_TEXTO, size=12),
         margin=dict(t=30, b=30, l=10, r=10),
         height=height,
     )
-    fig.update_xaxes(gridcolor=AZUL_BORDA, zeroline=False)
-    fig.update_yaxes(gridcolor=AZUL_BORDA, zeroline=False)
+    fig.update_xaxes(gridcolor="#cdc8b9", zeroline=False)
+    fig.update_yaxes(gridcolor="#cdc8b9", zeroline=False)
     return fig
 
 def normalizar_secao(s):
@@ -1115,6 +1115,186 @@ def calcular_cmv_semana(uid: int, data_ini: str, data_fim: str,
     }
 
 
+# ── Metas semanais de compras ─────────────────────────────────────────────────
+
+@st.cache_data(ttl=60)
+def load_meta_semanal(uid: int, periodo: str) -> dict:
+    """Retorna {data_inicio: meta_valor} para o período."""
+    db = conn()
+    rows = db.execute(
+        "SELECT data_inicio, meta_valor FROM meta_semanal_compras "
+        "WHERE unidade_id=? AND strftime('%Y-%m', data_inicio)=?",
+        (uid, periodo)
+    ).fetchall()
+    db.close()
+    return {r[0]: float(r[1]) for r in rows}
+
+
+def salvar_meta_semanal(uid: int, data_inicio: str, data_fim: str, meta_valor: float):
+    """Upsert da meta semanal para uma unidade/semana."""
+    from datetime import datetime as _dt
+    agora = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+    db = conn()
+    db.execute(
+        """INSERT INTO meta_semanal_compras (unidade_id, data_inicio, data_fim, meta_valor, criado_em, atualizado_em)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(unidade_id, data_inicio) DO UPDATE SET
+             meta_valor=excluded.meta_valor, data_fim=excluded.data_fim, atualizado_em=excluded.atualizado_em""",
+        (uid, data_inicio, data_fim, meta_valor, agora, agora)
+    )
+    db.commit()
+    db.close()
+    st.cache_data.clear()
+
+
+@st.cache_data(ttl=120)
+def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
+                       data_ini: str, data_fim: str,
+                       insumo_ids: list[int]) -> pd.DataFrame:
+    """
+    Compara consumo teórico (PDV × fator) vs consumo real (EI + Compras − EF)
+    para os insumo_ids fornecidos, no intervalo [data_ini, data_fim].
+    ei_data / ef_data = datas das contagens que delimitam o período.
+    Retorna DataFrame com colunas:
+      proteina, n_pratos, consumo_teo, ei_qty, compras_qty, ef_qty,
+      consumo_real, desvio, custo_medio, desvio_rs, tem_contagem
+    """
+    db = conn()
+
+    ids_sql = f"({','.join(str(x) for x in insumo_ids)})"
+
+    # ── Insumos do setor com mapeamento PDV ──────────────────────────────────
+    proteinas = pd.read_sql(f"""
+        SELECT DISTINCT i.id AS insumo_id, i.nome AS proteina,
+               COUNT(m.id) AS n_pratos
+        FROM venda_direta_pdv_map m JOIN insumos i ON i.id = m.insumo_id
+        WHERE m.insumo_id IN {ids_sql}
+        GROUP BY i.id
+    """, db)
+
+    if proteinas.empty:
+        db.close()
+        return pd.DataFrame()
+
+    prot_ids_sql = f"({','.join(str(x) for x in proteinas['insumo_id'].tolist())})"
+
+    # ── Consumo teórico: vendas × fator ──────────────────────────────────────
+    teo = pd.read_sql(f"""
+        SELECT m.insumo_id,
+               SUM(vp.quantidade * m.fator) AS consumo_teo
+        FROM vendas_produtos vp
+        JOIN venda_direta_pdv_map m ON m.produto_pdv = vp.produto
+        WHERE vp.unidade_id = {uid} AND vp.tipo = 'VENDA'
+          AND vp.data_inicio >= '{data_ini}' AND vp.data_fim <= '{data_fim}'
+          AND m.insumo_id IN {prot_ids_sql}
+        GROUP BY m.insumo_id
+    """, db)
+
+    # ── EI / EF em unidades ───────────────────────────────────────────────────
+    def _qty(data_contagem):
+        if not data_contagem:
+            return pd.DataFrame(columns=["insumo_id", "qty"])
+        return pd.read_sql(f"""
+            SELECT insumo_id, quantidade AS qty
+            FROM contagens
+            WHERE unidade_id = {uid} AND data = '{data_contagem}'
+              AND insumo_id IN {prot_ids_sql}
+        """, db)
+
+    ei_df = _qty(ei_data).rename(columns={"qty": "ei_qty"})
+    ef_df = _qty(ef_data).rename(columns={"qty": "ef_qty"})
+
+    # ── Compras em unidades no período (busca por ID e por nome) ─────────────
+    # Cobre duplicatas: mesmo produto com IDs diferentes no banco
+    import re as _re
+    _STOP = {'UND','KG','LT','ML','G','PORCIONADO','PORCAO','PROCESSADO','INDIVIDUAL','UN','DE','DO','DA','E'}
+
+    def _norm(s):
+        """Remove tudo que não seja letra/número e converte para maiúsculo."""
+        return _re.sub(r'[^A-Z0-9]', '', str(s or '').upper())
+
+    def _tokens(nome):
+        """Divide o nome original em tokens alfanuméricos e remove stopwords."""
+        raw = _re.split(r'[\s\[\]\(\)\-\|\.]+', str(nome or '').upper())
+        return [_norm(t) for t in raw if _norm(t) and _norm(t) not in _STOP and len(_norm(t)) > 1]
+
+    def _match(compra_nome, tokens):
+        cn = _norm(compra_nome)
+        return all(tok in cn for tok in tokens)
+
+    if ei_data and ef_data:
+        all_comp = pd.read_sql(f"""
+            SELECT insumo_id, nome_insumo, SUM(quantidade) AS qty
+            FROM compras
+            WHERE unidade_id = {uid}
+              AND data > '{ei_data}' AND data <= '{ef_data}'
+              AND quantidade > 0 AND valor_total > 0
+              AND (status_pedido = 'conferido' OR status_pedido IS NULL)
+            GROUP BY insumo_id, nome_insumo
+        """, db)
+
+        comp_rows = []
+        for _, prow in proteinas.iterrows():
+            pid    = int(prow["insumo_id"])
+            tokens = _tokens(prow["proteina"])
+            matched = all_comp[
+                (all_comp["insumo_id"] == pid) |
+                all_comp["nome_insumo"].apply(lambda n: _match(n, tokens))
+            ]
+            qty = matched["qty"].sum()
+            comp_rows.append({"insumo_id": pid, "compras_qty": float(qty)})
+        comp_df = pd.DataFrame(comp_rows)
+    else:
+        all_comp = pd.DataFrame()
+        comp_df  = pd.DataFrame(columns=["insumo_id", "compras_qty"])
+
+    # ── Custo médio por insumo (cobre duplicatas por nome) ───────────────────
+    custo_raw = pd.read_sql(f"""
+        SELECT insumo_id, nome_insumo,
+               SUM(valor_total) AS vt, SUM(quantidade) AS qt
+        FROM compras
+        WHERE unidade_id = {uid} AND valor_total > 0 AND quantidade > 0
+        GROUP BY insumo_id, nome_insumo
+    """, db)
+
+    custo_rows = []
+    for _, prow in proteinas.iterrows():
+        pid    = int(prow["insumo_id"])
+        tokens = _tokens(prow["proteina"])
+        matched = custo_raw[
+            (custo_raw["insumo_id"] == pid) |
+            custo_raw["nome_insumo"].apply(lambda n: _match(n, tokens))
+        ]
+        tot_vt = matched["vt"].sum()
+        tot_qt = matched["qt"].sum()
+        custo_rows.append({"insumo_id": pid, "custo_medio": tot_vt / tot_qt if tot_qt > 0 else 0.0})
+    custo_df = pd.DataFrame(custo_rows)
+
+    db.close()
+
+    # ── Junta tudo ────────────────────────────────────────────────────────────
+    for df in [teo, ei_df, ef_df, comp_df, custo_df]:
+        df["insumo_id"] = pd.to_numeric(df["insumo_id"], errors="coerce").astype("Int64")
+    proteinas["insumo_id"] = pd.to_numeric(proteinas["insumo_id"], errors="coerce").astype("Int64")
+
+    res = (proteinas
+           .merge(teo,     on="insumo_id", how="left")
+           .merge(ei_df,   on="insumo_id", how="left")
+           .merge(ef_df,   on="insumo_id", how="left")
+           .merge(comp_df, on="insumo_id", how="left")
+           .merge(custo_df, on="insumo_id", how="left"))
+
+    for col in ["consumo_teo", "ei_qty", "ef_qty", "compras_qty", "custo_medio"]:
+        res[col] = res.get(col, 0.0).fillna(0.0)
+
+    res["consumo_real"] = res["ei_qty"] + res["compras_qty"] - res["ef_qty"]
+    res["desvio"]       = res["consumo_real"] - res["consumo_teo"]
+    res["desvio_rs"]    = res["desvio"] * res["custo_medio"]
+    res["tem_contagem"] = (res["ei_qty"] + res["ef_qty"]) > 0
+
+    return res[res["consumo_teo"] > 0].sort_values("consumo_teo", ascending=False).reset_index(drop=True)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # INTERFACE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1325,6 +1505,78 @@ estoque_por_semana = load_estoque_por_semana(uid, _datas_inicio_sem)
 df_top       = load_top_produtos(uid, periodo)
 df_compras   = load_compras_mes(uid, periodo)
 em_transito_mes = load_em_transito_mes(uid, periodo)
+metas_semanais  = load_meta_semanal(uid, periodo)   # {data_inicio: meta_valor}
+
+# ── UI master: editar metas semanais (apenas acesso sem unit_lock) ────────────
+_is_master = st.session_state.get("unit_lock") is None
+if _is_master and semanas_raw:
+    with st.expander("⚙️ Definir metas de compras por semana — acesso master", expanded=False):
+        st.markdown(
+            f'<div style="font-size:.78rem;color:{VI_SECAO};margin-bottom:10px;">'
+            "Defina o valor máximo de compras (R$) para cada semana de "
+            f"<b>{datetime.strptime(periodo,'%Y-%m').strftime('%B/%Y').title()}</b> "
+            f"na unidade <b>{nome_sel}</b>. "
+            "A meta percentual mensal permanece inalterada."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        cols_meta = st.columns(len(semanas_raw))
+        for i, (di, df_s, ei_d, ef_d) in enumerate(semanas_raw):
+            label_s = f"S{i+1} · {datetime.strptime(di,'%Y-%m-%d').strftime('%d/%m')}–{datetime.strptime(df_s,'%Y-%m-%d').strftime('%d/%m')}"
+            cur_val = metas_semanais.get(di, 0.0)
+            with cols_meta[i]:
+                novo = st.number_input(
+                    label_s,
+                    min_value=0.0,
+                    value=cur_val,
+                    step=500.0,
+                    format="%.0f",
+                    key=f"meta_sem_{uid}_{di}",
+                    help="Meta de compras em R$ para esta semana. 0 = sem meta definida (usa CMC% do mês).",
+                )
+                if novo != cur_val:
+                    salvar_meta_semanal(uid, di, df_s, novo)
+                    st.rerun()
+        st.markdown(
+            f'<div style="font-size:.72rem;color:{VI_SECAO};margin-top:6px;">'
+            "Meta = 0 → o sistema usa a meta CMC% mensal como referência."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+# ── Análise de proteínas porcionadas ─────────────────────────────────────────
+if semana_filtro:
+    _prot_ei   = semana_filtro[2]
+    _prot_ef   = semana_filtro[3]
+    _prot_ini  = semana_filtro[0]
+    _prot_fim  = semana_filtro[1]
+else:
+    _db_prot   = conn()
+    _prot_ei   = _db_prot.execute(
+        "SELECT MIN(data) FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=?",
+        (uid, periodo)
+    ).fetchone()[0]
+    _prot_ef   = _db_prot.execute(
+        "SELECT MAX(data) FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=?",
+        (uid, periodo)
+    ).fetchone()[0]
+    _db_prot.close()
+    # Alinha vendas à janela das contagens disponíveis
+    _prot_ini  = _prot_ei or f"{periodo}-01"
+    _prot_fim  = _prot_ef or f"{periodo}-31"
+# Insumos analisados por setor (IDs do banco_central.db)
+_IDS_COZINHA = [1172, 1614, 1615, 1170, 1619, 1612, 234, 233, 442, 1164]
+# FILE MIGNON: 150g=1172, 130g=1614, 180g=1615, 100g=1170
+# Frango 160g=1619, Chorizo=1612, Burger 160g=234, Burger 100g=233
+# Salmao 180g=442, Babybeef=1164
+_IDS_BAR = [20, 18, 121, 122, 123, 124, 108, 107, 111, 486, 1, 299, 95, 96, 471, 472]
+# Agua s/g=20, c/g=18, Coca KS orig=121, zero=122, 310ml orig=123, zero=124
+# Heineken LN=108, 00alc=107, Chaka=111, Pouca Roupa=486
+# 4 Estaciones=1, Malacara=299, Cafe desc=95, espresso=96
+# Bodega Vieja=471, Casa Donoso=472
+
+df_cozinha = load_desvios_setor(uid, _prot_ei, _prot_ef, _prot_ini, _prot_fim, _IDS_COZINHA)
+df_bar     = load_desvios_setor(uid, _prot_ei, _prot_ef, _prot_ini, _prot_fim, _IDS_BAR)
 
 # Estoque: usa a contagem de fechamento da semana selecionada (ef_data),
 # ou a contagem mais recente quando nenhuma semana é selecionada
@@ -1437,6 +1689,12 @@ fat_proj_api  = _proj_unidade.get("projecao", 0.0)
 # Usa projeção da API se disponível e razoável (> 50% do real = não é zero-fill)
 fat_proj = fat_proj_api if fat_proj_api > fat_real * 0.5 else fat_proj_linear
 _usa_proj_api = fat_proj_api > fat_real * 0.5
+
+# ── Abas principais ──────────────────────────────────────────────────────────
+_tab_grupo, _tab_resumo, _tab_compras, _tab_evolucao, _tab_estoque, _tab_vendas = st.tabs([
+    "📊 Grupo", "📌 Resumo", "🛒 Compras", "📅 Evolução", "📦 Estoque", "🍽️ Vendas",
+])
+_tab_grupo.__enter__()
 
 # ════════════════════════════════════════════════════════════════════════════
 # BLOCO 0 — Quadro de Acompanhamento de Compras (Grupo)
@@ -1689,6 +1947,8 @@ else:
     """, unsafe_allow_html=True)
 
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+_tab_grupo.__exit__(None, None, None)
+_tab_resumo.__enter__()
 
 # ════════════════════════════════════════════════════════════════════════════
 # BLOCO 1 — KPIs
@@ -1787,9 +2047,19 @@ with c3:
 
 with c4:
     if _escopo == "semana":
-        kpi("Compras Conferidas", f"R$ {_comp_kpi:,.0f}",
-            f"Meta CMC {_meta_cmc:.0f}%  →  R$ {_fat_kpi * _meta_cmc / 100:,.0f}",
-            _cls_cmc(_cmc_kpi), "")
+        _meta_sem_val = metas_semanais.get(semana_filtro[0], 0.0) if semana_filtro else 0.0
+        if _meta_sem_val > 0:
+            _cls_c4  = "bom" if _comp_kpi <= _meta_sem_val else ("atencao" if _comp_kpi <= _meta_sem_val * 1.05 else "critico")
+            _desvio_sem = _comp_kpi - _meta_sem_val
+            _desvio_txt = (f'{"+" if _desvio_sem >= 0 else ""}R$ {_desvio_sem:,.0f} vs meta semanal')
+            kpi("Compras Conferidas", f"R$ {_comp_kpi:,.0f}",
+                f"Meta semanal: R$ {_meta_sem_val:,.0f}",
+                _cls_c4,
+                f'<span style="font-size:.75rem;color:{"#7f0000" if _desvio_sem > 0 else "#2a6b3c"};font-weight:600">{_desvio_txt}</span>')
+        else:
+            kpi("Compras Conferidas", f"R$ {_comp_kpi:,.0f}",
+                f"Meta CMC {_meta_cmc:.0f}%  →  R$ {_fat_kpi * _meta_cmc / 100:,.0f}",
+                _cls_cmc(_cmc_kpi), "")
     elif META_FAT > 0:
         pct_meta = fat_real / META_FAT * 100
         cls_proj = _cls_fat_dyn(fat_proj, META_FAT)
@@ -1841,6 +2111,8 @@ if _op_total > 0:
         </div>
       </div>
     </div>""", unsafe_allow_html=True)
+_tab_resumo.__exit__(None, None, None)
+_tab_evolucao.__enter__()
 
 # ════════════════════════════════════════════════════════════════════════════
 # BLOCO 2 — Faturamento Semanal
@@ -1875,8 +2147,16 @@ else:
     df_fat_sem["comp"]        = df_fat_sem["comp"].fillna(0)
     df_fat_sem["em_transito"] = df_fat_sem.get("em_transito", pd.Series([0.0]*len(df_fat_sem))).fillna(0)
 
-    # Meta de compra (CMC 28%) por semana
-    df_fat_sem["meta_comp"] = df_fat_sem["fat"] * META_CMC / 100
+    # Meta de compra: usa meta semanal definida pelo master quando disponível;
+    # fallback para CMC% mensal quando meta não foi definida (meta_sem=0)
+    df_fat_sem["meta_comp"] = df_fat_sem["data_inicio"].apply(
+        lambda di: metas_semanais.get(di, 0.0) or (
+            df_fat_sem.loc[df_fat_sem["data_inicio"] == di, "fat"].iloc[0] * META_CMC / 100
+        )
+    )
+    df_fat_sem["tem_meta_sem"] = df_fat_sem["data_inicio"].apply(
+        lambda di: metas_semanais.get(di, 0.0) > 0
+    )
     df_fat_sem["cmc_pct"]   = df_fat_sem.apply(
         lambda r: r["comp"] / r["fat"] * 100 if r["fat"] > 0 else 0, axis=1
     )
@@ -1905,9 +2185,11 @@ else:
             textposition="outside",
             textfont=dict(size=10, color=COR_ATENC),
         ))
-        # Linha: meta de compra (CMC 28%)
+        # Linha: meta de compra (semanal quando definida, senão CMC%)
+        _tem_meta_sem = df_fat_sem["tem_meta_sem"].any()
+        _leg_meta = "Meta semanal (definida)" if _tem_meta_sem else f"Meta compra ({META_CMC:.0f}%)"
         fig.add_trace(go.Scatter(
-            name=f"Meta compra ({META_CMC:.0f}%)",
+            name=_leg_meta,
             x=df_fat_sem["label"],
             y=df_fat_sem["meta_comp"],
             mode="lines+markers",
@@ -1996,6 +2278,8 @@ else:
                 f'</div></div>',
                 unsafe_allow_html=True,
             )
+_tab_evolucao.__exit__(None, None, None)
+_tab_resumo.__enter__()
 
 # ════════════════════════════════════════════════════════════════════════════
 # BLOCO 3 — CMV por Categoria
@@ -2061,6 +2345,8 @@ else:
           </span>
           {"<br><span style='color:" + COR_CRIT + ";font-size:.85rem;'>⚠ Excesso vs meta: R$ " + f"{excesso_val:,.0f}" + f" ({excesso_cmv:+.1f}pp)</span>" if excesso_cmv > 0 else "<br><span style='color:#2a6b3c;font-size:.85rem;'>✔ Dentro da meta</span>"}
         </div>""", unsafe_allow_html=True)
+_tab_resumo.__exit__(None, None, None)
+_tab_vendas.__enter__()
 
 # ════════════════════════════════════════════════════════════════════════════
 # BLOCO 4 — Top Produtos Vendidos + Compras (lado a lado)
@@ -2127,6 +2413,103 @@ with col_comp:
         )
         st.plotly_chart(fig4, use_container_width=True)
 
+# ── Helper: renderiza um bloco de desvios (cozinha ou bar) ───────────────────
+def _render_desvios(df_setor: pd.DataFrame, titulo: str, csv_key: str) -> None:
+    secao(titulo)
+
+    _prot_periodo = semana_sel if semana_filtro else datetime.strptime(periodo, "%Y-%m").strftime("%B/%Y").title()
+    _prot_ei_lbl  = datetime.strptime(_prot_ei, "%Y-%m-%d").strftime("%d/%m") if _prot_ei else "—"
+    _prot_ef_lbl  = datetime.strptime(_prot_ef, "%Y-%m-%d").strftime("%d/%m") if _prot_ef else "—"
+
+    st.markdown(
+        f'<div style="font-size:.78rem;color:{VI_SECAO};margin-bottom:10px;">'
+        f'Período: <b>{_prot_periodo}</b> &nbsp;·&nbsp; '
+        f'EI: contagem de <b>{_prot_ei_lbl}</b> &nbsp;·&nbsp; '
+        f'EF: contagem de <b>{_prot_ef_lbl}</b> &nbsp;·&nbsp; '
+        f'Desvio = Real − Teórico &nbsp;|&nbsp; '
+        f'🔴 Desvio positivo = usou mais do que vendeu (quebra/desperdício/erro)'
+        f'</div>', unsafe_allow_html=True
+    )
+
+    if df_setor.empty:
+        st.info("Sem dados para o período — verifique se há vendas e contagens registradas.")
+        return
+    if not _prot_ei or not _prot_ef:
+        st.warning("⚠️ Sem duas contagens no período para calcular consumo real.")
+        return
+
+    _sem_contagem = df_setor[~df_setor["tem_contagem"]]
+    _com_contagem = df_setor[df_setor["tem_contagem"]].copy()
+
+    if not _com_contagem.empty:
+        _tot_teo    = _com_contagem["consumo_teo"].sum()
+        _tot_real   = _com_contagem["consumo_real"].sum()
+        _tot_desv   = _com_contagem["desvio"].sum()
+        _tot_desv_r = _com_contagem["desvio_rs"].sum()
+        _cls_desv   = "bom" if _tot_desv <= 0 else ("atencao" if _tot_desv <= _tot_teo * 0.05 else "critico")
+        _pct_desv   = _tot_desv / _tot_teo * 100 if _tot_teo > 0 else 0
+
+        kp1, kp2, kp3, kp4 = st.columns(4)
+        with kp1:
+            kpi("Consumo Teórico", f"{_tot_teo:.0f} un", "soma das vendas x fator", "cinza", "")
+        with kp2:
+            kpi("Consumo Real", f"{_tot_real:.0f} un", "EI + Compras - EF (contagens)", "cinza", "")
+        with kp3:
+            kpi("Desvio Total", f"{_tot_desv:+.0f} un", f"R$ {_tot_desv_r:+,.0f}", _cls_desv, "")
+        with kp4:
+            kpi("Desvio %", f"{_pct_desv:+.1f}%", "sobre consumo teorico", _cls_desv, "")
+
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+        df_show = _com_contagem[[
+            "proteina", "n_pratos", "consumo_teo", "ei_qty", "compras_qty",
+            "ef_qty", "consumo_real", "desvio", "custo_medio", "desvio_rs"
+        ]].copy()
+        df_show.columns = [
+            "Insumo", "Pratos", "Teorico (un)", "EI (un)", "Compras (un)",
+            "EF (un)", "Real (un)", "Desvio (un)", "Custo Unit.", "Desvio (R$)"
+        ]
+        df_show["Teorico (un)"] = df_show["Teorico (un)"].map("{:.0f}".format)
+        df_show["EI (un)"]      = df_show["EI (un)"].map("{:.0f}".format)
+        df_show["Compras (un)"] = df_show["Compras (un)"].map("{:.0f}".format)
+        df_show["EF (un)"]      = df_show["EF (un)"].map("{:.0f}".format)
+        df_show["Real (un)"]    = df_show["Real (un)"].map("{:.0f}".format)
+        df_show["Custo Unit."]  = df_show["Custo Unit."].map("R$ {:.2f}".format)
+        _dev_raw = _com_contagem["desvio"].values
+        _dev_rs  = _com_contagem["desvio_rs"].values
+        df_show["Desvio (un)"] = [
+            f"🔴 {v:+.0f}" if v > 0 else (f"🟢 {v:+.0f}" if v < 0 else "✔ 0")
+            for v in _dev_raw
+        ]
+        df_show["Desvio (R$)"] = [
+            f"🔴 R$ {v:+,.0f}" if v > 0 else (f"🟢 R$ {v:+,.0f}" if v < 0 else "R$ 0")
+            for v in _dev_rs
+        ]
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
+        _csv = df_show.to_csv(index=False).encode("utf-8-sig")
+        st.download_button("⬇️ Baixar CSV", _csv,
+                           file_name=f"{csv_key}_{nome_sel}_{periodo}.csv",
+                           mime="text/csv", key=f"csv_{csv_key}_{uid}")
+
+    if not _sem_contagem.empty:
+        nomes_sc = ", ".join(_sem_contagem["proteina"].tolist())
+        st.warning(
+            f"⚠️ Sem contagem Atlas para: **{nomes_sc}** — "
+            f"consumo teorico calculado mas real nao disponivel nesta unidade/periodo."
+        )
+
+
+# ── Cozinha ───────────────────────────────────────────────────────────────────
+_render_desvios(df_cozinha, "🍳 Cozinha — Teorico vs Real", "cozinha")
+
+st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+# ── Bar ───────────────────────────────────────────────────────────────────────
+_render_desvios(df_bar, "🍷 Bar — Teorico vs Real", "bar")
+
+_tab_vendas.__exit__(None, None, None)
+_tab_estoque.__enter__()
+
 # ════════════════════════════════════════════════════════════════════════════
 # BLOCO 5 — Estoque Atual (se disponível)
 # ════════════════════════════════════════════════════════════════════════════
@@ -2166,7 +2549,7 @@ else:
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-    # Mescla variação vs contagem anterior
+    # ── EI / Compras / EF / Consumo por item ─────────────────────────────────
     df_full = df_e.copy()
     if not df_estoque_ant.empty:
         df_full["insumo_id"] = pd.to_numeric(df_full["insumo_id"], errors="coerce").astype("Int64")
@@ -2175,23 +2558,30 @@ else:
     else:
         df_full["valor_estoque_ant"] = 0.0
 
-    df_full["delta_val"] = df_full["valor_estoque"] - df_full["valor_estoque_ant"]
-    df_full["delta_pct"] = df_full.apply(
-        lambda r: (r["delta_val"] / r["valor_estoque_ant"] * 100)
-        if r["valor_estoque_ant"] > 0 else None, axis=1
-    )
-
-    def _fmt_variacao(row):
-        if df_estoque_ant.empty:
-            return "—"
-        delta = row["delta_val"]
-        pct   = row["delta_pct"]
-        if pct is None:
-            sinal = "+" if delta >= 0 else ""
-            return f"{'↑' if delta >= 0 else '↓'} {sinal}R$ {abs(delta):,.0f} (novo)"
-        seta  = "↑" if delta >= 0 else "↓"
-        sinal = "+" if delta >= 0 else "−"
-        return f"{seta} {sinal}R$ {abs(delta):,.0f} ({abs(pct):.1f}%)"
+    # Compras por insumo entre a contagem anterior e a atual
+    _data_ei_est = None
+    if data_estoque:
+        _db_est = conn()
+        _r_ei_est = _db_est.execute(
+            "SELECT MAX(data) FROM contagens WHERE unidade_id=? AND data < ?",
+            (uid, data_estoque)
+        ).fetchone()
+        _data_ei_est = _r_ei_est[0] if _r_ei_est else None
+        if _data_ei_est:
+            _comp_item_df = pd.read_sql(
+                "SELECT insumo_id, SUM(valor_total) AS comp_item "
+                "FROM compras WHERE unidade_id=? AND data>? AND data<=? "
+                f"AND valor_total>0 AND (status_pedido='conferido' OR status_pedido IS NULL) "
+                f"{_SQL_EXCL_OP} GROUP BY insumo_id",
+                _db_est, params=[uid, _data_ei_est, data_estoque]
+            )
+            _comp_item_df["insumo_id"] = pd.to_numeric(_comp_item_df["insumo_id"], errors="coerce").astype("Int64")
+            df_full = df_full.merge(_comp_item_df, on="insumo_id", how="left")
+        _db_est.close()
+    if "comp_item" not in df_full.columns:
+        df_full["comp_item"] = 0.0
+    df_full["comp_item"] = df_full["comp_item"].fillna(0)
+    df_full["consumo_val"] = df_full["valor_estoque_ant"] + df_full["comp_item"] - df_full["valor_estoque"]
 
     def _fmt_cobertura(dias):
         if dias is None or (isinstance(dias, float) and dias != dias):
@@ -2201,20 +2591,48 @@ else:
         if d <= 21:  return f"✔ {d}d"
         return f"🔴 {d}d"
 
-    df_full["Variação"] = df_full.apply(_fmt_variacao, axis=1)
     df_full["Capital Parado"] = df_full["cobertura_dias"].apply(_fmt_cobertura)
 
-    df_show = df_full[["nome", "secao_norm", "classe", "quantidade",
-                        "custo_medio", "valor_estoque", "Variação", "Capital Parado"]].copy()
-    df_show.columns = ["Produto", "Categoria", "Classe", "Qtd",
-                        "Custo Unit.", "Valor (R$)", "Variação vs anterior", "Capital Parado"]
-    df_show["Custo Unit."] = df_show["Custo Unit."].map("R$ {:.2f}".format)
-    df_show["Valor (R$)"]  = df_show["Valor (R$)"].map("R$ {:,.0f}".format)
-    df_show["Qtd"]         = df_show["Qtd"].map("{:.1f}".format)
+    # ── Filtros e busca ───────────────────────────────────────────────────────
+    _cats_disp = sorted(df_full["secao_norm"].dropna().unique().tolist())
+    _fc1, _fc2, _fc3 = st.columns([2, 2, 1])
+    with _fc1:
+        _busca_est = st.text_input("🔍 Buscar produto", "", key=f"est_busca_{uid}")
+    with _fc2:
+        _cat_sel_est = st.multiselect("Categoria", _cats_disp, default=[], key=f"est_cat_{uid}",
+                                      placeholder="Todas as categorias")
+    with _fc3:
+        _show_neg_est = st.checkbox("Só consumo negativo", False, key=f"est_neg_{uid}")
+
+    df_disp_est = df_full.copy()
+    if _busca_est:
+        df_disp_est = df_disp_est[df_disp_est["nome"].str.contains(_busca_est, case=False, na=False)]
+    if _cat_sel_est:
+        df_disp_est = df_disp_est[df_disp_est["secao_norm"].isin(_cat_sel_est)]
+    if _show_neg_est:
+        df_disp_est = df_disp_est[df_disp_est["consumo_val"] < 0]
 
     n_a = len(df_e[df_e["classe"] == "A"])
     n_b = len(df_e[df_e["classe"] == "B"])
     n_c = len(df_e[df_e["classe"] == "C"])
+
+    _ei_lbl = f"EI {datetime.strptime(_data_ei_est,'%Y-%m-%d').strftime('%d/%m')}" if _data_ei_est else "EI"
+    _ef_lbl = f"EF {datetime.strptime(data_estoque,'%Y-%m-%d').strftime('%d/%m')}" if data_estoque else "EF"
+
+    df_show = df_disp_est[["nome", "secao_norm", "classe",
+                             "valor_estoque_ant", "comp_item", "valor_estoque", "consumo_val",
+                             "custo_medio", "Capital Parado"]].copy()
+    df_show.columns = ["Produto", "Categoria", "Classe",
+                        _ei_lbl, "Compras (R$)", _ef_lbl, "Consumo (R$)",
+                        "Custo Unit.", "Capital Parado"]
+    df_show[_ei_lbl]         = df_show[_ei_lbl].map("R$ {:,.0f}".format)
+    df_show["Compras (R$)"] = df_show["Compras (R$)"].map("R$ {:,.0f}".format)
+    df_show[_ef_lbl]         = df_show[_ef_lbl].map("R$ {:,.0f}".format)
+    df_show["Custo Unit."]  = df_show["Custo Unit."].map("R$ {:.2f}".format)
+    _consumo_raw = df_disp_est["consumo_val"].values
+    df_show["Consumo (R$)"] = [
+        f"🔴 R$ {v:,.0f}" if v < 0 else f"R$ {v:,.0f}" for v in _consumo_raw
+    ]
 
     with st.expander(
         f"📋 Posição completa de estoque — {len(df_show)} itens  "
@@ -2222,13 +2640,25 @@ else:
         expanded=True
     ):
         st.dataframe(df_show, use_container_width=True, hide_index=True)
+        _csv_est = df_show.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "⬇️ Baixar CSV",
+            _csv_est,
+            file_name=f"estoque_{nome_sel}_{data_estoque or 'sem_data'}.csv",
+            mime="text/csv",
+            key=f"csv_estoque_{uid}",
+        )
         st.markdown(
             f'<div style="font-size:11px;color:{VI_SECAO};margin-top:4px;">'
-            f'Capital Parado = dias de estoque cobrindo o consumo médio dos últimos 30 dias &nbsp;|&nbsp; '
-            f'⚠ &lt; 7 dias &nbsp; ✔ 7–21 dias &nbsp; 🔴 &gt; 21 dias (excesso de capital imobilizado) &nbsp;|&nbsp; '
-            f'Variação calculada em relação à contagem imediatamente anterior'
+            f'EI = contagem de {_data_ei_est or "—"} &nbsp;|&nbsp; '
+            f'EF = contagem de {data_estoque or "—"} &nbsp;|&nbsp; '
+            f'Consumo = EI + Compras − EF &nbsp;|&nbsp; '
+            f'🔴 Consumo negativo = mais entrou do que saiu &nbsp;|&nbsp; '
+            f'Capital Parado: ⚠ &lt;7d · ✔ 7–21d · 🔴 &gt;21d (excesso de capital imobilizado)'
             f'</div>', unsafe_allow_html=True
         )
+_tab_estoque.__exit__(None, None, None)
+_tab_compras.__enter__()
 
 # ════════════════════════════════════════════════════════════════════════════
 # BLOCO 6 — Lista de Compras (detalhada, colapsável)
@@ -2246,6 +2676,15 @@ with st.expander(exp_label, expanded=False):
         df_c["V. Total"] = df_c["V. Total"].map("R$ {:,.2f}".format)
         df_c["Produto"]  = df_c["Produto"].str[:40]
         st.dataframe(df_c, use_container_width=True, hide_index=True)
+        _csv_comp = df_c.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "⬇️ Baixar CSV",
+            _csv_comp,
+            file_name=f"compras_{nome_sel}_{periodo}.csv",
+            mime="text/csv",
+            key=f"csv_compras_{uid}",
+        )
+_tab_compras.__exit__(None, None, None)
 
 # ── Rodapé ────────────────────────────────────────────────────────────────────
 

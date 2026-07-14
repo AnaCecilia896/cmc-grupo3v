@@ -1,10 +1,93 @@
 {
-  "inicio": "2026-07-14 16:58:49",
-  "pid": 3036,
+  "inicio": "2026-07-14 16:00:04",
+  "pid": 33872,
   "periodos": [
     "2026-07",
     "2026-06"
   ],
-  "em_andamento": true,
-  "periodos_detalhes": {}
+  "em_andamento": false,
+  "periodos_detalhes": {
+    "2026-07": {
+      "vmarket": {
+        "ok": 3,
+        "erros": [],
+        "timestamp": "2026-07-14 16:00:37"
+      },
+      "atlas": {
+        "ok": 5,
+        "erros": [],
+        "timestamp": "2026-07-14 16:01:18"
+      },
+      "contagens": {
+        "ok": true,
+        "inseridos": 0,
+        "atualizados": 0,
+        "erros": [],
+        "timestamp": "2026-07-14 16:02:20"
+      },
+      "faturamento": {
+        "ok": true,
+        "timestamp": "2026-07-14 16:03:39"
+      },
+      "produtos": {
+        "ok": true,
+        "linhas": 2268,
+        "timestamp": "2026-07-14 16:04:43"
+      },
+      "custos_receitas": {
+        "ok": true,
+        "calculados": 60,
+        "timestamp": "2026-07-14 16:04:53"
+      },
+      "cmv": {
+        "ok": true,
+        "timestamp": "2026-07-14 16:05:16"
+      }
+    },
+    "2026-06": {
+      "vmarket": {
+        "ok": 3,
+        "erros": [],
+        "timestamp": "2026-07-14 16:05:40"
+      },
+      "atlas": {
+        "ok": 5,
+        "erros": [],
+        "timestamp": "2026-07-14 16:06:34"
+      },
+      "contagens": {
+        "ok": true,
+        "inseridos": 0,
+        "atualizados": 0,
+        "erros": [],
+        "timestamp": "2026-07-14 16:08:34"
+      },
+      "faturamento": {
+        "ok": false,
+        "erro": "('Connection aborted.', ConnectionResetError(10054, 'Foi forçado o cancelamento de uma conexão existente pelo host remoto', None, 10054, None))",
+        "timestamp": "2026-07-14 16:58:42"
+      },
+      "produtos": {
+        "ok": true,
+        "linhas": 4353,
+        "timestamp": "2026-07-14 17:00:44"
+      },
+      "custos_receitas": {
+        "ok": false,
+        "erro": "database is locked",
+        "timestamp": "2026-07-14 17:00:56"
+      },
+      "cmv": {
+        "ok": true,
+        "timestamp": "2026-07-14 17:01:12"
+      }
+    }
+  },
+  "git_push": {
+    "ok": true,
+    "timestamp": "2026-07-14 17:01:24"
+  },
+  "fim": "2026-07-14 17:01:24",
+  "duracao_segundos": 3680.4,
+  "sucesso": false
 }

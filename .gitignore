@@ -16,6 +16,7 @@
 # Banco com dados e status de atualização (commitados para o app funcionar em cloud read-only)
 !banco_central.db
 !ultima_atualizacao.json
+!metas_semanais.json
 
 # Bloqueia secrets reais (mas o .example é commitado via whitelist acima)
 .streamlit/secrets.toml

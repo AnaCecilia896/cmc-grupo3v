@@ -1137,35 +1137,138 @@ def calcular_cmv_semana(uid: int, data_ini: str, data_fim: str,
 
 
 # ── Metas semanais de compras ─────────────────────────────────────────────────
+# Persistência via GitHub API: metas_semanais.json no repositório.
+# Estrutura: {"uid:data_inicio": meta_valor, ...}
+# Fallback: leitura do arquivo local quando GitHub não configurado.
+
+_METAS_JSON_PATH = os.path.join(os.path.dirname(__file__), "metas_semanais.json")
+
+def _gh_secrets() -> tuple[str, str] | None:
+    """Retorna (token, repo) dos secrets do Streamlit, ou None se não configurado."""
+    try:
+        tok  = st.secrets.get("github_token", "")
+        repo = st.secrets.get("github_repo", "")
+        if tok and repo:
+            return tok, repo
+    except Exception:
+        pass
+    return None
+
+
+def _load_metas_json() -> dict:
+    """Lê metas_semanais.json: tenta GitHub API primeiro, fallback para arquivo local."""
+    import json as _json
+    gh = _gh_secrets()
+    if gh:
+        import urllib.request as _ur
+        token, repo = gh
+        url = f"https://api.github.com/repos/{repo}/contents/metas_semanais.json"
+        req = _ur.Request(url, headers={
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json",
+        })
+        try:
+            with _ur.urlopen(req, timeout=5) as r:
+                data = _json.loads(r.read())
+                import base64 as _b64
+                return _json.loads(_b64.b64decode(data["content"]).decode())
+        except Exception:
+            pass
+    try:
+        with open(_METAS_JSON_PATH, "r", encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_metas_json(metas: dict) -> bool:
+    """
+    Salva metas_semanais.json via GitHub API (commit direto no repo).
+    Também atualiza o arquivo local como cache.
+    Retorna True se salvou no GitHub, False se só local.
+    """
+    import json as _json, base64 as _b64
+    content_str = _json.dumps(metas, ensure_ascii=False, indent=2)
+    try:
+        with open(_METAS_JSON_PATH, "w", encoding="utf-8") as f:
+            f.write(content_str)
+    except Exception:
+        pass
+
+    gh = _gh_secrets()
+    if not gh:
+        return False
+
+    import urllib.request as _ur
+    token, repo = gh
+    api_url = f"https://api.github.com/repos/{repo}/contents/metas_semanais.json"
+
+    # Busca SHA atual do arquivo (necessário para o PUT)
+    sha = None
+    req_get = _ur.Request(api_url, headers={
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    })
+    try:
+        with _ur.urlopen(req_get, timeout=5) as r:
+            sha = _json.loads(r.read()).get("sha")
+    except Exception:
+        pass
+
+    body = {
+        "message": "chore: atualiza metas semanais de compras",
+        "content": _b64.b64encode(content_str.encode()).decode(),
+    }
+    if sha:
+        body["sha"] = sha
+
+    import json as _json2
+    req_put = _ur.Request(
+        api_url,
+        data=_json2.dumps(body).encode(),
+        headers={
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json",
+            "Content-Type": "application/json",
+        },
+        method="PUT",
+    )
+    try:
+        with _ur.urlopen(req_put, timeout=10) as r:
+            return r.status in (200, 201)
+    except Exception:
+        return False
+
 
 @st.cache_data(ttl=60)
 def load_meta_semanal(uid: int, periodo: str) -> dict:
-    """Retorna {data_inicio: meta_valor} para o período."""
-    db = conn()
-    rows = db.execute(
-        "SELECT data_inicio, meta_valor FROM meta_semanal_compras "
-        "WHERE unidade_id=? AND strftime('%Y-%m', data_inicio)=?",
-        (uid, periodo)
-    ).fetchall()
-    db.close()
-    return {r[0]: float(r[1]) for r in rows}
+    """Retorna {data_inicio: meta_valor} para o período (lê do JSON persistido)."""
+    all_metas = _load_metas_json()
+    uid_key = str(uid)
+    return {
+        k.split(":", 1)[1]: float(v)
+        for k, v in all_metas.items()
+        if k.startswith(f"{uid_key}:") and k.split(":", 1)[1].startswith(periodo[:7])
+    }
 
 
 def salvar_meta_semanal(uid: int, data_inicio: str, data_fim: str, meta_valor: float):
-    """Upsert da meta semanal para uma unidade/semana."""
-    from datetime import datetime as _dt
-    agora = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
-    db = conn()
-    db.execute(
-        """INSERT INTO meta_semanal_compras (unidade_id, data_inicio, data_fim, meta_valor, criado_em, atualizado_em)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(unidade_id, data_inicio) DO UPDATE SET
-             meta_valor=excluded.meta_valor, data_fim=excluded.data_fim, atualizado_em=excluded.atualizado_em""",
-        (uid, data_inicio, data_fim, meta_valor, agora, agora)
-    )
-    db.commit()
-    db.close()
+    """Persiste a meta semanal no JSON do repositório via GitHub API."""
+    all_metas = _load_metas_json()
+    key = f"{uid}:{data_inicio}"
+    if meta_valor == 0.0:
+        all_metas.pop(key, None)
+    else:
+        all_metas[key] = meta_valor
+    ok = _save_metas_json(all_metas)
     st.cache_data.clear()
+    if not ok:
+        st.warning(
+            "⚠️ Meta salva localmente, mas **não persistiu no servidor** "
+            "(GitHub API não configurada). Configure `github_token` e `github_repo` "
+            "nos secrets do Streamlit para persistência permanente.",
+            icon="⚠️",
+        )
 
 
 @st.cache_data(ttl=120)

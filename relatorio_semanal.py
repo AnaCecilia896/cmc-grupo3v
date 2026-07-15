@@ -489,6 +489,27 @@ def get_periodos():
     return [r[0] for r in rows]
 
 @st.cache_data(ttl=120)
+def load_compras_categoria_semana(uid: int, data_ini: str, data_fim: str) -> pd.DataFrame:
+    """Compras por categoria para um intervalo de datas (visão semanal)."""
+    db = conn()
+    df = pd.read_sql(
+        f"""
+        SELECT COALESCE(NULLIF(TRIM(secao),''), 'Outros') AS categoria,
+               SUM(valor_total) AS compras
+        FROM compras
+        WHERE unidade_id = ? AND data >= ? AND data <= ?
+          AND valor_total > 0 AND quantidade > 0
+          AND (status_pedido = 'conferido' OR status_pedido IS NULL)
+          {_SQL_EXCL_OP}
+        GROUP BY categoria
+        ORDER BY compras DESC
+        """,
+        db, params=[uid, data_ini, data_fim]
+    )
+    db.close()
+    return df
+
+@st.cache_data(ttl=120)
 def load_cmv_mes(uid, periodo):
     db = conn()
     df = pd.read_sql(
@@ -2282,69 +2303,133 @@ _tab_evolucao.__exit__(None, None, None)
 _tab_resumo.__enter__()
 
 # ════════════════════════════════════════════════════════════════════════════
-# BLOCO 3 — CMV por Categoria
+# BLOCO 3 — CMV / Compras por Categoria (respeita filtro semanal)
 # ════════════════════════════════════════════════════════════════════════════
 
-secao("🔬 CMV por Categoria")
+if semana_filtro:
+    # ── Visão semanal: compras por categoria no período selecionado ───────────
+    _s_ini, _s_fim = semana_filtro[0], semana_filtro[1]
+    cats_sem = load_compras_categoria_semana(uid, _s_ini, _s_fim)
+    cats_sem["categoria"] = cats_sem["categoria"].apply(normalizar_secao)
+    cats_sem = cats_sem.groupby("categoria", as_index=False)["compras"].sum()
+    cats_sem = cats_sem.sort_values("compras", ascending=False).reset_index(drop=True)
+    _fat_sem = fat_real  # faturamento já filtrado pela semana quando semana_filtro ativo
+    cats_sem["pct"] = cats_sem["compras"] / _fat_sem * 100 if _fat_sem > 0 else 0
 
-if cats.empty:
-    if not has_cmv:
-        st.info(f"CMV não calculado para {nome_sel} em {periodo} — são necessárias ao menos 2 contagens de estoque.")
+    secao(f"🔬 Compras por Categoria — {semana_sel}")
+
+    if cats_sem.empty:
+        st.info("Sem compras registradas para a semana selecionada.")
     else:
-        st.info("Sem detalhes por categoria.")
-else:
-    col_cat1, col_cat2 = st.columns([3, 2])
+        col_cat1, col_cat2 = st.columns([3, 2])
 
-    with col_cat1:
-        df_plot = cats[cats["cmv_valor"] > 0].sort_values("cmv_valor", ascending=True).tail(12)
-        cores_bar = [COR_CRIT if v > META_CMV * 0.4 else COR_BOM
-                     for v in df_plot["cmv_percentual"]]
-        fig2 = go.Figure(go.Bar(
-            x=df_plot["cmv_valor"],
-            y=df_plot["categoria"],
-            orientation="h",
-            marker_color=cores_bar,
-            text=[f"R$ {v:,.0f}  ({p:.1f}%)"
-                  for v, p in zip(df_plot["cmv_valor"], df_plot["cmv_percentual"])],
-            textposition="inside",
-            textfont=dict(size=11, color=AZUL_ESCURO),
-        ))
-        fig2 = graf_layout(fig2, height=340)
-        fig2.update_layout(
-            title=dict(text="Valor consumido (R$) e % do faturamento", font=dict(size=12)),
-            xaxis=dict(tickprefix="R$ ", gridcolor=AZUL_BORDA),
-        )
-        st.plotly_chart(fig2, use_container_width=True)
+        with col_cat1:
+            df_plot = cats_sem.sort_values("compras", ascending=True).tail(12)
+            fig2 = go.Figure(go.Bar(
+                x=df_plot["compras"],
+                y=df_plot["categoria"],
+                orientation="h",
+                marker_color=COR_BOM,
+                text=[f"R$ {v:,.0f}  ({p:.1f}%)"
+                      for v, p in zip(df_plot["compras"], df_plot["pct"])],
+                textposition="inside",
+                textfont=dict(size=11, color=AZUL_ESCURO),
+            ))
+            fig2 = graf_layout(fig2, height=340)
+            fig2.update_layout(
+                title=dict(text="Compras por categoria (R$ e % do fat. da semana)", font=dict(size=12)),
+                xaxis=dict(tickprefix="R$ ", gridcolor=AZUL_BORDA),
+            )
+            st.plotly_chart(fig2, use_container_width=True)
 
-    with col_cat2:
-        df_cats_show = cats[cats["cmv_valor"] > 0].sort_values("cmv_valor", ascending=False).copy()
-        df_cats_show["EI"] = df_cats_show["estoque_inicial"].map("R$ {:,.0f}".format)
-        df_cats_show["Compras"] = df_cats_show["compras"].map("R$ {:,.0f}".format)
-        df_cats_show["EF"] = df_cats_show["estoque_final"].map("R$ {:,.0f}".format)
-        df_cats_show["CMV"] = df_cats_show["cmv_valor"].map("R$ {:,.0f}".format)
-        df_cats_show["CMV%"] = df_cats_show["cmv_percentual"].map("{:.1f}%".format)
-        st.dataframe(
-            df_cats_show[["categoria", "Compras", "CMV", "CMV%"]].rename(columns={"categoria": "Categoria"}),
-            use_container_width=True, hide_index=True, height=340
-        )
+        with col_cat2:
+            df_cats_show = cats_sem.copy()
+            df_cats_show["Compras"] = df_cats_show["compras"].map("R$ {:,.0f}".format)
+            df_cats_show["% Fat."]  = df_cats_show["pct"].map("{:.1f}%".format)
+            st.dataframe(
+                df_cats_show[["categoria", "Compras", "% Fat."]].rename(columns={"categoria": "Categoria"}),
+                use_container_width=True, hide_index=True, height=340
+            )
 
-    # Resumo CMV total
-    if has_cmv:
-        excesso_cmv = max(0, cmv_pct - META_CMV)
-        excesso_val = excesso_cmv / 100 * fat_real
-        cor_brd = COR_BOM if cmv_pct <= META_CMV else COR_CRIT
+        _tot_sem = cats_sem["compras"].sum()
+        _cmc_sem = _tot_sem / _fat_sem * 100 if _fat_sem > 0 else 0
+        _meta_val_sem = META_CMC / 100 * _fat_sem
+        _excesso_sem  = max(0, _cmc_sem - META_CMC)
+        _excesso_val_sem = _excesso_sem / 100 * _fat_sem
+        cor_brd = COR_BOM if _cmc_sem <= META_CMC else COR_CRIT
         st.markdown(f"""
         <div style="background:{VI_CARD};border-radius:8px;padding:12px 18px;
                     border-left:4px solid {cor_brd};margin-top:4px;
                     box-shadow:0 2px 6px rgba(0,0,0,.25);">
           <span style="color:{VI_SUBTXT};font-size:.8rem;font-weight:700;text-transform:uppercase;">
-            Resumo do CMV</span><br>
+            Resumo de Compras — {semana_sel}</span><br>
           <span style="color:{VI_TEXTO};">
-            EI <b>R$ {ei_mes:,.0f}</b> + Compras <b>R$ {comp_mes:,.0f}</b> − EF <b>R$ {ef_mes:,.0f}</b>
-            = CMV <b>R$ {cmv_val:,.0f}</b> ({cmv_pct:.1f}% do fat.)
+            Compras <b>R$ {_tot_sem:,.0f}</b> · Faturamento <b>R$ {_fat_sem:,.0f}</b>
+            · CMC <b>{_cmc_sem:.1f}%</b> (meta {META_CMC:.0f}%)
           </span>
-          {"<br><span style='color:" + COR_CRIT + ";font-size:.85rem;'>⚠ Excesso vs meta: R$ " + f"{excesso_val:,.0f}" + f" ({excesso_cmv:+.1f}pp)</span>" if excesso_cmv > 0 else "<br><span style='color:#2a6b3c;font-size:.85rem;'>✔ Dentro da meta</span>"}
+          {"<br><span style='color:" + COR_CRIT + ";font-size:.85rem;'>⚠ Excesso vs meta: R$ " + f"{_excesso_val_sem:,.0f}" + f" ({_excesso_sem:+.1f}pp)</span>" if _excesso_sem > 0 else "<br><span style='color:#2a6b3c;font-size:.85rem;'>✔ Dentro da meta</span>"}
+          <br><span style="color:{VI_SUBTXT};font-size:.72rem;">⚠ Visão semanal mostra compras do período — CMV (com EI/EF) disponivel apenas na visao mensal.</span>
         </div>""", unsafe_allow_html=True)
+
+else:
+    # ── Visão mensal: CMV completo (EI + Compras − EF) ───────────────────────
+    secao("🔬 CMV por Categoria")
+
+    if cats.empty:
+        if not has_cmv:
+            st.info(f"CMV nao calculado para {nome_sel} em {periodo} — sao necessarias ao menos 2 contagens de estoque.")
+        else:
+            st.info("Sem detalhes por categoria.")
+    else:
+        col_cat1, col_cat2 = st.columns([3, 2])
+
+        with col_cat1:
+            df_plot = cats[cats["cmv_valor"] > 0].sort_values("cmv_valor", ascending=True).tail(12)
+            cores_bar = [COR_CRIT if v > META_CMV * 0.4 else COR_BOM
+                         for v in df_plot["cmv_percentual"]]
+            fig2 = go.Figure(go.Bar(
+                x=df_plot["cmv_valor"],
+                y=df_plot["categoria"],
+                orientation="h",
+                marker_color=cores_bar,
+                text=[f"R$ {v:,.0f}  ({p:.1f}%)"
+                      for v, p in zip(df_plot["cmv_valor"], df_plot["cmv_percentual"])],
+                textposition="inside",
+                textfont=dict(size=11, color=AZUL_ESCURO),
+            ))
+            fig2 = graf_layout(fig2, height=340)
+            fig2.update_layout(
+                title=dict(text="Valor consumido (R$) e % do faturamento", font=dict(size=12)),
+                xaxis=dict(tickprefix="R$ ", gridcolor=AZUL_BORDA),
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+        with col_cat2:
+            df_cats_show = cats[cats["cmv_valor"] > 0].sort_values("cmv_valor", ascending=False).copy()
+            df_cats_show["Compras"] = df_cats_show["compras"].map("R$ {:,.0f}".format)
+            df_cats_show["CMV"]     = df_cats_show["cmv_valor"].map("R$ {:,.0f}".format)
+            df_cats_show["CMV%"]    = df_cats_show["cmv_percentual"].map("{:.1f}%".format)
+            st.dataframe(
+                df_cats_show[["categoria", "Compras", "CMV", "CMV%"]].rename(columns={"categoria": "Categoria"}),
+                use_container_width=True, hide_index=True, height=340
+            )
+
+        if has_cmv:
+            excesso_cmv = max(0, cmv_pct - META_CMV)
+            excesso_val = excesso_cmv / 100 * fat_real
+            cor_brd = COR_BOM if cmv_pct <= META_CMV else COR_CRIT
+            st.markdown(f"""
+            <div style="background:{VI_CARD};border-radius:8px;padding:12px 18px;
+                        border-left:4px solid {cor_brd};margin-top:4px;
+                        box-shadow:0 2px 6px rgba(0,0,0,.25);">
+              <span style="color:{VI_SUBTXT};font-size:.8rem;font-weight:700;text-transform:uppercase;">
+                Resumo do CMV</span><br>
+              <span style="color:{VI_TEXTO};">
+                EI <b>R$ {ei_mes:,.0f}</b> + Compras <b>R$ {comp_mes:,.0f}</b> − EF <b>R$ {ef_mes:,.0f}</b>
+                = CMV <b>R$ {cmv_val:,.0f}</b> ({cmv_pct:.1f}% do fat.)
+              </span>
+              {"<br><span style='color:" + COR_CRIT + ";font-size:.85rem;'>⚠ Excesso vs meta: R$ " + f"{excesso_val:,.0f}" + f" ({excesso_cmv:+.1f}pp)</span>" if excesso_cmv > 0 else "<br><span style='color:#2a6b3c;font-size:.85rem;'>✔ Dentro da meta</span>"}
+            </div>""", unsafe_allow_html=True)
 _tab_resumo.__exit__(None, None, None)
 _tab_vendas.__enter__()
 

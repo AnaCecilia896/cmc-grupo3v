@@ -1,4 +1,4 @@
 * text=auto
-*.db binary
-*.sqlite binary
-*.sqlite3 binary
+*.db binary merge=ours
+*.sqlite binary merge=ours
+*.sqlite3 binary merge=ours

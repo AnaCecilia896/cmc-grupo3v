@@ -1,4 +1,4 @@
-"""
+﻿"""
 relatorio_semanal.py — Relatório Semanal Cantucci Asa Norte  (reformulado)
 Uso: streamlit run relatorio_semanal.py --server.port 8502
 """
@@ -2416,7 +2416,9 @@ if semana_filtro:
     cats_sem["categoria"] = cats_sem["categoria"].apply(normalizar_secao)
     cats_sem = cats_sem.groupby("categoria", as_index=False)["compras"].sum()
     cats_sem = cats_sem.sort_values("compras", ascending=False).reset_index(drop=True)
-    _fat_sem = fat_real  # faturamento já filtrado pela semana quando semana_filtro ativo
+    # Faturamento da semana selecionada (nao do mes todo)
+    _fat_sem_row = df_fat_sem[df_fat_sem["data_inicio"] == _s_ini] if not df_fat_sem.empty else pd.DataFrame()
+    _fat_sem = float(_fat_sem_row["fat"].iloc[0]) if not _fat_sem_row.empty else 0.0
     cats_sem["pct"] = cats_sem["compras"] / _fat_sem * 100 if _fat_sem > 0 else 0
 
     secao(f"🔬 Compras por Categoria — {semana_sel}")

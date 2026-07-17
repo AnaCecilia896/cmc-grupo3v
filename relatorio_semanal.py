@@ -1155,40 +1155,51 @@ def _gh_secrets() -> tuple[str, str] | None:
     return None
 
 
+def _gh_get_file() -> tuple[dict, str | None]:
+    """GET metas_semanais.json do GitHub. Retorna (conteudo_dict, sha)."""
+    import json as _json, base64 as _b64, urllib.request as _ur
+    gh = _gh_secrets()
+    if not gh:
+        return {}, None
+    token, repo = gh
+    url = f"https://api.github.com/repos/{repo}/contents/metas_semanais.json"
+    req = _ur.Request(url, headers={
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    })
+    try:
+        with _ur.urlopen(req, timeout=8) as r:
+            data = _json.loads(r.read())
+            sha = data.get("sha")
+            content = _json.loads(_b64.b64decode(data["content"].replace("\n", "")).decode())
+            return content, sha
+    except Exception as e:
+        raise RuntimeError(f"GET GitHub falhou: {e}") from e
+
+
 def _load_metas_json() -> dict:
     """Lê metas_semanais.json: tenta GitHub API primeiro, fallback para arquivo local."""
-    import json as _json
-    gh = _gh_secrets()
-    if gh:
-        import urllib.request as _ur
-        token, repo = gh
-        url = f"https://api.github.com/repos/{repo}/contents/metas_semanais.json"
-        req = _ur.Request(url, headers={
-            "Authorization": f"token {token}",
-            "Accept": "application/vnd.github.v3+json",
-        })
-        try:
-            with _ur.urlopen(req, timeout=5) as r:
-                data = _json.loads(r.read())
-                import base64 as _b64
-                return _json.loads(_b64.b64decode(data["content"]).decode())
-        except Exception:
-            pass
     try:
+        content, _ = _gh_get_file()
+        return content
+    except Exception:
+        pass
+    try:
+        import json as _j
         with open(_METAS_JSON_PATH, "r", encoding="utf-8") as f:
-            return _json.load(f)
+            return _j.load(f)
     except Exception:
         return {}
 
 
-def _save_metas_json(metas: dict) -> bool:
+def _save_metas_json(metas: dict) -> tuple[bool, str]:
     """
-    Salva metas_semanais.json via GitHub API (commit direto no repo).
-    Também atualiza o arquivo local como cache.
-    Retorna True se salvou no GitHub, False se só local.
+    Salva metas_semanais.json via GitHub API.
+    Retorna (True, "") em sucesso ou (False, mensagem_erro) em falha.
     """
-    import json as _json, base64 as _b64
+    import json as _json, base64 as _b64, urllib.request as _ur, urllib.error as _ue
     content_str = _json.dumps(metas, ensure_ascii=False, indent=2)
+
     try:
         with open(_METAS_JSON_PATH, "w", encoding="utf-8") as f:
             f.write(content_str)
@@ -1197,35 +1208,26 @@ def _save_metas_json(metas: dict) -> bool:
 
     gh = _gh_secrets()
     if not gh:
-        return False
+        return False, "github_token / github_repo não configurados nos Secrets do Streamlit."
 
-    import urllib.request as _ur
     token, repo = gh
     api_url = f"https://api.github.com/repos/{repo}/contents/metas_semanais.json"
 
-    # Busca SHA atual do arquivo (necessário para o PUT)
-    sha = None
-    req_get = _ur.Request(api_url, headers={
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json",
-    })
     try:
-        with _ur.urlopen(req_get, timeout=5) as r:
-            sha = _json.loads(r.read()).get("sha")
-    except Exception:
-        pass
+        _, sha = _gh_get_file()
+    except Exception as e:
+        return False, f"Não foi possível ler arquivo atual no GitHub: {e}"
 
-    body = {
+    body: dict = {
         "message": "chore: atualiza metas semanais de compras",
         "content": _b64.b64encode(content_str.encode()).decode(),
     }
     if sha:
         body["sha"] = sha
 
-    import json as _json2
     req_put = _ur.Request(
         api_url,
-        data=_json2.dumps(body).encode(),
+        data=_json.dumps(body).encode(),
         headers={
             "Authorization": f"token {token}",
             "Accept": "application/vnd.github.v3+json",
@@ -1234,10 +1236,15 @@ def _save_metas_json(metas: dict) -> bool:
         method="PUT",
     )
     try:
-        with _ur.urlopen(req_put, timeout=10) as r:
-            return r.status in (200, 201)
-    except Exception:
-        return False
+        with _ur.urlopen(req_put, timeout=15) as r:
+            if r.status in (200, 201):
+                return True, ""
+            return False, f"GitHub respondeu HTTP {r.status}"
+    except _ue.HTTPError as e:
+        body_err = e.read().decode(errors="replace")
+        return False, f"GitHub HTTP {e.code}: {body_err[:200]}"
+    except Exception as e:
+        return False, f"Erro de rede: {e}"
 
 
 @st.cache_data(ttl=60)
@@ -1260,15 +1267,12 @@ def salvar_meta_semanal(uid: int, data_inicio: str, data_fim: str, meta_valor: f
         all_metas.pop(key, None)
     else:
         all_metas[key] = meta_valor
-    ok = _save_metas_json(all_metas)
+    ok, erro = _save_metas_json(all_metas)
     st.cache_data.clear()
-    if not ok:
-        st.warning(
-            "⚠️ Meta salva localmente, mas **não persistiu no servidor** "
-            "(GitHub API não configurada). Configure `github_token` e `github_repo` "
-            "nos secrets do Streamlit para persistência permanente.",
-            icon="⚠️",
-        )
+    if ok:
+        st.toast("✅ Meta salva com sucesso!", icon="✅")
+    else:
+        st.error(f"❌ **Falha ao salvar meta no GitHub:** {erro}", icon="🚨")
 
 
 @st.cache_data(ttl=120)

@@ -1515,6 +1515,9 @@ with c_unidade:
         # Acesso por senha de unidade — trava a seleção
         SLUG_SEL = _unit_lock
         _nome_locked = _slug_para_nome[SLUG_SEL]
+        # nome_sel também precisa existir aqui — é usado em títulos, nomes de
+        # arquivo CSV e no rodapé, fora de qualquer checagem de unit_lock.
+        nome_sel = _nome_locked
         st.text_input("Unidade", value=f"🔒 {_nome_locked}", disabled=True,
                       help="Acesso restrito a esta unidade. Use a senha master pra ver todas.")
     else:

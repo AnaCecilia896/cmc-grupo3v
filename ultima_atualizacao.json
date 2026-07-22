@@ -1,96 +1,10 @@
 {
-  "inicio": "2026-07-21 16:00:07",
-  "pid": 33760,
+  "inicio": "2026-07-22 11:35:27",
+  "pid": 16768,
   "periodos": [
     "2026-07",
     "2026-06"
   ],
-  "em_andamento": false,
-  "periodos_detalhes": {
-    "2026-07": {
-      "vmarket": {
-        "ok": 2,
-        "erros": [],
-        "timestamp": "2026-07-21 16:00:20"
-      },
-      "atlas": {
-        "ok": 6,
-        "erros": [],
-        "timestamp": "2026-07-21 16:00:55"
-      },
-      "contagens": {
-        "ok": true,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [],
-        "timestamp": "2026-07-21 16:02:35"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-07-21 16:03:44"
-      },
-      "produtos": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-07-21 16:03:54"
-      },
-      "custos_receitas": {
-        "ok": true,
-        "calculados": 60,
-        "timestamp": "2026-07-21 16:04:06"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-07-21 16:04:24"
-      }
-    },
-    "2026-06": {
-      "vmarket": {
-        "ok": 2,
-        "erros": [],
-        "timestamp": "2026-07-21 16:04:36"
-      },
-      "atlas": {
-        "ok": 6,
-        "erros": [],
-        "timestamp": "2026-07-21 16:05:38"
-      },
-      "contagens": {
-        "ok": false,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [
-          "asa-norte",
-          "asa-sul"
-        ],
-        "timestamp": "2026-07-21 16:14:54"
-      },
-      "faturamento": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-07-21 16:15:25"
-      },
-      "produtos": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-07-21 16:15:40"
-      },
-      "custos_receitas": {
-        "ok": true,
-        "calculados": 60,
-        "timestamp": "2026-07-21 16:16:08"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-07-21 16:16:27"
-      }
-    }
-  },
-  "git_push": {
-    "ok": true,
-    "timestamp": "2026-07-21 16:16:46"
-  },
-  "fim": "2026-07-21 16:16:46",
-  "duracao_segundos": 999.0,
-  "sucesso": false
+  "em_andamento": true,
+  "periodos_detalhes": {}
 }

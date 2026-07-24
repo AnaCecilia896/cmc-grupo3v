@@ -1044,7 +1044,8 @@ def load_estoque_atual(uid, data_contagem: str = None):
 @st.cache_data(ttl=120)
 def load_estoque_contagem_anterior(uid: int, data_atual: str) -> pd.DataFrame:
     """
-    Retorna DataFrame {insumo_id, valor_estoque_ant} da contagem imediatamente anterior a data_atual.
+    Retorna DataFrame {insumo_id, qtd_estoque_ant, valor_estoque_ant} da contagem
+    imediatamente anterior a data_atual.
     Usa o mesmo cálculo de custo médio de load_estoque_atual.
     Retorna DataFrame vazio se não houver contagem anterior.
     """
@@ -1056,10 +1057,11 @@ def load_estoque_contagem_anterior(uid: int, data_atual: str) -> pd.DataFrame:
     data_ant = row[0] if row else None
     if not data_ant:
         db.close()
-        return pd.DataFrame(columns=["insumo_id", "valor_estoque_ant"])
+        return pd.DataFrame(columns=["insumo_id", "qtd_estoque_ant", "valor_estoque_ant"])
 
     df = pd.read_sql("""
         SELECT ct.insumo_id,
+               ct.quantidade AS qtd_estoque_ant,
                ct.quantidade * COALESCE(p.cm, 0) AS valor_estoque_ant
         FROM contagens ct
         LEFT JOIN (
@@ -2768,10 +2770,12 @@ else:
         df_full["insumo_id"] = pd.to_numeric(df_full["insumo_id"], errors="coerce").astype("Int64")
         df_full = df_full.merge(df_estoque_ant, on="insumo_id", how="left")
         df_full["valor_estoque_ant"] = df_full["valor_estoque_ant"].fillna(0)
+        df_full["qtd_estoque_ant"]   = df_full["qtd_estoque_ant"].fillna(0)
     else:
         df_full["valor_estoque_ant"] = 0.0
+        df_full["qtd_estoque_ant"]   = 0.0
 
-    # Compras por insumo entre a contagem anterior e a atual
+    # Compras por insumo entre a contagem anterior e a atual (valor E quantidade)
     _data_ei_est = None
     if data_estoque:
         _db_est = conn()
@@ -2782,7 +2786,7 @@ else:
         _data_ei_est = _r_ei_est[0] if _r_ei_est else None
         if _data_ei_est:
             _comp_item_df = pd.read_sql(
-                "SELECT insumo_id, SUM(valor_total) AS comp_item "
+                "SELECT insumo_id, SUM(valor_total) AS comp_item, SUM(quantidade) AS comp_item_qtd "
                 "FROM compras WHERE unidade_id=? AND data>? AND data<=? "
                 f"AND valor_total>0 AND (status_pedido='conferido' OR status_pedido IS NULL) "
                 f"{_SQL_EXCL_OP} GROUP BY insumo_id",
@@ -2793,8 +2797,13 @@ else:
         _db_est.close()
     if "comp_item" not in df_full.columns:
         df_full["comp_item"] = 0.0
-    df_full["comp_item"] = df_full["comp_item"].fillna(0)
+    if "comp_item_qtd" not in df_full.columns:
+        df_full["comp_item_qtd"] = 0.0
+    df_full["comp_item"]     = df_full["comp_item"].fillna(0)
+    df_full["comp_item_qtd"] = df_full["comp_item_qtd"].fillna(0)
+    # Consumo em valor e em quantidade: EI + Compras − EF
     df_full["consumo_val"] = df_full["valor_estoque_ant"] + df_full["comp_item"] - df_full["valor_estoque"]
+    df_full["consumo_qtd"] = df_full["qtd_estoque_ant"] + df_full["comp_item_qtd"] - df_full["quantidade"]
 
     def _fmt_cobertura(dias):
         if dias is None or (isinstance(dias, float) and dias != dias):
@@ -2832,19 +2841,34 @@ else:
     _ei_lbl = f"EI {datetime.strptime(_data_ei_est,'%Y-%m-%d').strftime('%d/%m')}" if _data_ei_est else "EI"
     _ef_lbl = f"EF {datetime.strptime(data_estoque,'%Y-%m-%d').strftime('%d/%m')}" if data_estoque else "EF"
 
+    def _fmt_qtd(q):
+        """Quantidade: inteiro quando redondo, senão até 2 casas (kg/lt)."""
+        try:
+            q = float(q)
+        except (TypeError, ValueError):
+            return "—"
+        if abs(q - round(q)) < 0.01:
+            return f"{q:,.0f}"
+        return f"{q:,.2f}"
+
     df_show = df_disp_est[["nome", "secao_norm", "classe",
-                             "valor_estoque_ant", "comp_item", "valor_estoque", "consumo_val",
+                             "qtd_estoque_ant", "comp_item_qtd", "quantidade",
+                             "consumo_qtd", "consumo_val",
                              "custo_medio", "Capital Parado"]].copy()
     df_show.columns = ["Produto", "Categoria", "Classe",
-                        _ei_lbl, "Compras (R$)", _ef_lbl, "Consumo (R$)",
+                        _ei_lbl, "Compras (Qtd)", _ef_lbl, "Consumo (Qtd)", "Consumo (R$)",
                         "Custo Unit.", "Capital Parado"]
-    df_show[_ei_lbl]         = df_show[_ei_lbl].map("R$ {:,.0f}".format)
-    df_show["Compras (R$)"] = df_show["Compras (R$)"].map("R$ {:,.0f}".format)
-    df_show[_ef_lbl]         = df_show[_ef_lbl].map("R$ {:,.0f}".format)
-    df_show["Custo Unit."]  = df_show["Custo Unit."].map("R$ {:.2f}".format)
-    _consumo_raw = df_disp_est["consumo_val"].values
+    df_show[_ei_lbl]          = df_show[_ei_lbl].map(_fmt_qtd)
+    df_show["Compras (Qtd)"]  = df_show["Compras (Qtd)"].map(_fmt_qtd)
+    df_show[_ef_lbl]          = df_show[_ef_lbl].map(_fmt_qtd)
+    df_show["Custo Unit."]    = df_show["Custo Unit."].map("R$ {:.2f}".format)
+    _consumo_qtd_raw = df_disp_est["consumo_qtd"].values
+    _consumo_val_raw = df_disp_est["consumo_val"].values
+    df_show["Consumo (Qtd)"] = [
+        f"🔴 {_fmt_qtd(v)}" if v < 0 else _fmt_qtd(v) for v in _consumo_qtd_raw
+    ]
     df_show["Consumo (R$)"] = [
-        f"🔴 R$ {v:,.0f}" if v < 0 else f"R$ {v:,.0f}" for v in _consumo_raw
+        f"🔴 R$ {v:,.0f}" if v < 0 else f"R$ {v:,.0f}" for v in _consumo_val_raw
     ]
 
     with st.expander(
@@ -2863,9 +2887,10 @@ else:
         )
         st.markdown(
             f'<div style="font-size:11px;color:{VI_SECAO};margin-top:4px;">'
+            f'EI/EF/Compras em QUANTIDADE (contagem/compra) &nbsp;|&nbsp; '
             f'EI = contagem de {_data_ei_est or "—"} &nbsp;|&nbsp; '
             f'EF = contagem de {data_estoque or "—"} &nbsp;|&nbsp; '
-            f'Consumo = EI + Compras − EF &nbsp;|&nbsp; '
+            f'Consumo = EI + Compras − EF (em Qtd e R$) &nbsp;|&nbsp; '
             f'🔴 Consumo negativo = mais entrou do que saiu &nbsp;|&nbsp; '
             f'Capital Parado: ⚠ &lt;7d · ✔ 7–21d · 🔴 &gt;21d (excesso de capital imobilizado)'
             f'</div>', unsafe_allow_html=True

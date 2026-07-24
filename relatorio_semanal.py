@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 from config import DB_FILE
+from classificar import classificar as _classificar_codigo, CATS_OPERACIONAIS
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 STATUS_FILE = os.path.join(_DIR, "ultima_atualizacao.json")
@@ -195,12 +196,19 @@ COR_ATENC_TXT = "#8a4e00"   # âmbar escuro — texto "atenção" sobre VI_CARD
 COR_CRIT_TXT  = "#7f0000"   # vermelho     — texto "crítico" sobre VI_CARD
 
 # Filtro SQL para excluir compras operacionais (não entram no CMC/CMV).
-# Usa 'FUNCION' (prefixo ASCII) em vez de 'FUNCIONARIO' porque o Atlas grava
-# "Alimentação Funcionários" — cujo maiúsculo "FUNCIONÁRIOS" traz o Á acentuado
-# e NÃO casa com 'FUNCIONARIO'. 'FUNCION' captura ambas as variantes.
+# Classificação por CÓDIGO Atlas (fonte de verdade): operacionais são as
+# categorias 400 (Alimentação Funcionários) e 301 (Material de Limpeza),
+# identificadas pelo sku_codigo no formato "XX.YYY-NNN".
+# Para linhas antigas sem código (VMarket/XLSX legado), cai no filtro por nome
+# usando 'FUNCION' (prefixo ASCII que cobre "FUNCIONÁRIOS" acentuado do Atlas).
 _SQL_EXCL_OP = (
-    "AND NOT (UPPER(COALESCE(secao,'')) LIKE '%LIMPEZA%' "
-    "OR UPPER(COALESCE(secao,'')) LIKE '%FUNCION%')"
+    "AND NOT ("
+    "  (sku_codigo IS NOT NULL AND sku_codigo != '' "
+    "     AND (sku_codigo LIKE '__.400-%' OR sku_codigo LIKE '__.301-%')) "
+    "  OR ((sku_codigo IS NULL OR sku_codigo = '') "
+    "     AND (UPPER(COALESCE(secao,'')) LIKE '%LIMPEZA%' "
+    "          OR UPPER(COALESCE(secao,'')) LIKE '%FUNCION%')) "
+    ")"
 )
 
 # Aliases mantidos por compatibilidade com resto do código
@@ -491,24 +499,27 @@ def get_periodos():
 
 @st.cache_data(ttl=120)
 def load_compras_categoria_semana(uid: int, data_ini: str, data_fim: str) -> pd.DataFrame:
-    """Compras por categoria para um intervalo de datas (visão semanal)."""
+    """Compras por categoria para um intervalo de datas (visão semanal).
+    Classifica por CÓDIGO Atlas (sku_codigo) com fallback por nome de seção."""
     db = conn()
-    df = pd.read_sql(
+    raw = pd.read_sql(
         f"""
-        SELECT COALESCE(NULLIF(TRIM(secao),''), 'Outros') AS categoria,
-               SUM(valor_total) AS compras
+        SELECT sku_codigo, secao, SUM(valor_total) AS compras
         FROM compras
         WHERE unidade_id = ? AND data >= ? AND data <= ?
           AND valor_total > 0 AND quantidade > 0
           AND (status_pedido = 'conferido' OR status_pedido IS NULL)
           {_SQL_EXCL_OP}
-        GROUP BY categoria
-        ORDER BY compras DESC
+        GROUP BY sku_codigo, secao
         """,
         db, params=[uid, data_ini, data_fim]
     )
     db.close()
-    return df
+    if raw.empty:
+        return pd.DataFrame(columns=["categoria", "compras"])
+    raw["categoria"] = raw.apply(lambda r: _classificar_codigo(r["sku_codigo"], r["secao"]), axis=1)
+    df = raw.groupby("categoria", as_index=False)["compras"].sum().sort_values("compras", ascending=False)
+    return df.reset_index(drop=True)
 
 @st.cache_data(ttl=120)
 def load_cmv_mes(uid, periodo):
@@ -637,7 +648,7 @@ def load_compras_mes(uid, periodo):
     """Retorna apenas compras CONFERIDAS (efetivas) do mês, excluindo categorias operacionais."""
     db = conn()
     df = pd.read_sql(
-        "SELECT secao, nome_insumo, quantidade, valor_unitario, valor_total, fornecedor, data "
+        "SELECT sku_codigo, secao, nome_insumo, quantidade, valor_unitario, valor_total, fornecedor, data "
         f"FROM compras WHERE unidade_id=? AND strftime('%Y-%m', data)=? AND valor_total>0 "
         f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP} "
         "ORDER BY data, valor_total DESC",
@@ -714,27 +725,27 @@ def load_semana_kpis(uid, data_inicio, data_fim):
 
 @st.cache_data(ttl=120)
 def load_compras_op(uid, data_ini, data_fim):
-    """Retorna compras de Material de Limpeza e Alimentação Funcionários no período."""
+    """Retorna compras de Material de Limpeza e Alimentação Funcionários no período.
+    Classifica por CÓDIGO Atlas (sku_codigo) com fallback por nome de seção."""
     db = conn()
     rows = db.execute("""
-        SELECT secao, COALESCE(SUM(valor_total), 0) as total
+        SELECT sku_codigo, secao, COALESCE(SUM(valor_total), 0) as total
         FROM compras
         WHERE unidade_id=? AND data>=? AND data<=?
           AND (status_pedido='conferido' OR status_pedido IS NULL)
           AND valor_total > 0
-          AND secao IS NOT NULL AND secao != ''
-        GROUP BY secao
+        GROUP BY sku_codigo, secao
     """, (uid, data_ini, data_fim)).fetchall()
     db.close()
     limpeza     = 0.0
-    uso_interno = 0.0
-    for sec, tot in rows:
-        cat = normalizar_secao(sec)
-        if cat == "Mat. Limpeza":
-            limpeza     += float(tot or 0)
+    alim_func   = 0.0
+    for cod, sec, tot in rows:
+        cat = _classificar_codigo(cod, sec)
+        if cat == "Material de Limpeza":
+            limpeza   += float(tot or 0)
         elif cat == "Alim. Funcionarios":
-            uso_interno += float(tot or 0)
-    return {"limpeza": limpeza, "uso_interno": uso_interno}
+            alim_func += float(tot or 0)
+    return {"limpeza": limpeza, "uso_interno": alim_func}
 
 
 @st.cache_data(ttl=120)
@@ -758,8 +769,13 @@ def load_grupo_cmc(periodo: str) -> pd.DataFrame:
         FROM compras
         WHERE strftime('%Y-%m', data) = ?
           AND (status_pedido = 'conferido' OR status_pedido IS NULL)
-          AND NOT (UPPER(COALESCE(secao,'')) LIKE '%LIMPEZA%'
-               OR  UPPER(COALESCE(secao,'')) LIKE '%FUNCION%')
+          AND NOT (
+              (sku_codigo IS NOT NULL AND sku_codigo != ''
+                 AND (sku_codigo LIKE '__.400-%' OR sku_codigo LIKE '__.301-%'))
+              OR ((sku_codigo IS NULL OR sku_codigo = '')
+                 AND (UPPER(COALESCE(secao,'')) LIKE '%LIMPEZA%'
+                      OR UPPER(COALESCE(secao,'')) LIKE '%FUNCION%'))
+          )
         GROUP BY unidade_id
     """, db, params=[periodo])
     db.close()
@@ -1011,17 +1027,17 @@ def load_estoque_atual(uid, data_contagem: str = None):
         axis=1,
     )
 
-    # Normalizar seção via lookup de compras
+    # Classificar por CÓDIGO Atlas via lookup de compras (sku_codigo + secao por insumo)
     db2 = conn()
     sec_df = pd.read_sql(
-        "SELECT insumo_id, MAX(secao) as secao FROM compras "
-        "WHERE unidade_id=? AND secao IS NOT NULL GROUP BY insumo_id",
+        "SELECT insumo_id, MAX(sku_codigo) as sku_codigo, MAX(secao) as secao FROM compras "
+        "WHERE unidade_id=? AND (secao IS NOT NULL OR sku_codigo IS NOT NULL) GROUP BY insumo_id",
         db2, params=[uid]
     )
     db2.close()
     sec_df["insumo_id"] = pd.to_numeric(sec_df["insumo_id"], errors="coerce").astype("Int64")
     df = df.merge(sec_df, on="insumo_id", how="left")
-    df["secao_norm"] = df["secao"].fillna("Outros").apply(normalizar_secao)
+    df["secao_norm"] = df.apply(lambda r: _classificar_codigo(r.get("sku_codigo"), r.get("secao")), axis=1)
     return df, data_ef
 
 
@@ -2421,9 +2437,7 @@ if semana_filtro:
     # ── Visão semanal: compras por categoria no período selecionado ───────────
     _s_ini, _s_fim = semana_filtro[0], semana_filtro[1]
     cats_sem = load_compras_categoria_semana(uid, _s_ini, _s_fim)
-    cats_sem["categoria"] = cats_sem["categoria"].apply(normalizar_secao)
-    cats_sem = cats_sem.groupby("categoria", as_index=False)["compras"].sum()
-    cats_sem = cats_sem.sort_values("compras", ascending=False).reset_index(drop=True)
+    # Já vem classificado por código (com fallback por nome) e agregado.
     # Faturamento da semana selecionada (nao do mes todo)
     _fat_sem_row = df_fat_sem[df_fat_sem["data_inicio"] == _s_ini] if not df_fat_sem.empty else pd.DataFrame()
     _fat_sem = float(_fat_sem_row["fat"].iloc[0]) if not _fat_sem_row.empty else 0.0
@@ -2583,7 +2597,8 @@ with col_comp:
     if df_compras_display.empty:
         st.info("Sem compras registradas.")
     else:
-        df_compras_display["secao_norm"] = df_compras_display["secao"].fillna("Outros").apply(normalizar_secao)
+        df_compras_display["secao_norm"] = df_compras_display.apply(
+            lambda r: _classificar_codigo(r.get("sku_codigo"), r.get("secao")), axis=1)
         comp_cat = (df_compras_display.groupby("secao_norm")["valor_total"]
                     .sum().reset_index()
                     .sort_values("valor_total", ascending=True))

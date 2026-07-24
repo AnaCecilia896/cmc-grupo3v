@@ -9,6 +9,7 @@
 !.streamlit/secrets.toml.example
 !README.md
 !relatorio_semanal.py
+!classificar.py
 !web_auth.py
 !config.py
 !requirements.txt

@@ -987,7 +987,7 @@ def load_estoque_atual(uid, data_contagem: str = None):
         return pd.DataFrame(), data_ef
 
     df = pd.read_sql("""
-        SELECT ct.insumo_id, i.nome, ct.quantidade,
+        SELECT ct.insumo_id, ct.sku_item_id, i.nome, ct.quantidade,
                COALESCE(p.cm, 0) AS custo_medio,
                ct.quantidade * COALESCE(p.cm, 0) AS valor_estoque
         FROM contagens ct
@@ -2785,15 +2785,17 @@ else:
         ).fetchone()
         _data_ei_est = _r_ei_est[0] if _r_ei_est else None
         if _data_ei_est:
+            # Casa compras por sku_item_id (UUID do SKU Atlas), pois nas unidades
+            # Atlas o insumo_id costuma vir NULL — o match por insumo_id perdia
+            # as compras e zerava as colunas de Compras/Consumo.
             _comp_item_df = pd.read_sql(
-                "SELECT insumo_id, SUM(valor_total) AS comp_item, SUM(quantidade) AS comp_item_qtd "
+                "SELECT sku_item_id, SUM(valor_total) AS comp_item, SUM(quantidade) AS comp_item_qtd "
                 "FROM compras WHERE unidade_id=? AND data>? AND data<=? "
                 f"AND valor_total>0 AND (status_pedido='conferido' OR status_pedido IS NULL) "
-                f"{_SQL_EXCL_OP} GROUP BY insumo_id",
+                f"{_SQL_EXCL_OP} AND sku_item_id IS NOT NULL GROUP BY sku_item_id",
                 _db_est, params=[uid, _data_ei_est, data_estoque]
             )
-            _comp_item_df["insumo_id"] = pd.to_numeric(_comp_item_df["insumo_id"], errors="coerce").astype("Int64")
-            df_full = df_full.merge(_comp_item_df, on="insumo_id", how="left")
+            df_full = df_full.merge(_comp_item_df, on="sku_item_id", how="left")
         _db_est.close()
     if "comp_item" not in df_full.columns:
         df_full["comp_item"] = 0.0

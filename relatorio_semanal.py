@@ -195,11 +195,12 @@ COR_ATENC_TXT = "#8a4e00"   # âmbar escuro — texto "atenção" sobre VI_CARD
 COR_CRIT_TXT  = "#7f0000"   # vermelho     — texto "crítico" sobre VI_CARD
 
 # Filtro SQL para excluir compras operacionais (não entram no CMC/CMV).
-# Cobre variantes VMarket (ASCII). Itens acentuados do Atlas ("Alimentação Funcionários")
-# são capturados via Python em normalizar_secao() / calcular_cmv.py.
+# Usa 'FUNCION' (prefixo ASCII) em vez de 'FUNCIONARIO' porque o Atlas grava
+# "Alimentação Funcionários" — cujo maiúsculo "FUNCIONÁRIOS" traz o Á acentuado
+# e NÃO casa com 'FUNCIONARIO'. 'FUNCION' captura ambas as variantes.
 _SQL_EXCL_OP = (
     "AND NOT (UPPER(COALESCE(secao,'')) LIKE '%LIMPEZA%' "
-    "OR UPPER(COALESCE(secao,'')) LIKE '%FUNCIONARIO%')"
+    "OR UPPER(COALESCE(secao,'')) LIKE '%FUNCION%')"
 )
 
 # Aliases mantidos por compatibilidade com resto do código
@@ -429,8 +430,8 @@ def normalizar_secao(s):
     def _n(x): return unicodedata.normalize("NFD", str(x or "")).encode("ascii","ignore").decode().upper().strip()
     n = _n(s)
     MAP = [
-        (["CARNE VERMELHA"],"Carnes Vermelhas"),
-        (["CARNE BRANCA"], "Carnes Brancas"),
+        (["CARNE VERMELHA","CARNES VERMELHA"],"Carnes Vermelhas"),
+        (["CARNE BRANCA","CARNES BRANCA"], "Carnes Brancas"),
         (["PESCADO","FRUTO DO MAR"],"Pescados"),
         (["ALCOOLICO","ALCOOLICOS","VINHO","ESPUMANTE","CERVEJA","DESTILADO"],"Beb. Alcoólicas"),
         (["BEBIDA NAO","BEBIDAS NAO","NAO-ALCOO","NAO ALCOO"],"Beb. N/Alcoólicas"),
@@ -758,7 +759,7 @@ def load_grupo_cmc(periodo: str) -> pd.DataFrame:
         WHERE strftime('%Y-%m', data) = ?
           AND (status_pedido = 'conferido' OR status_pedido IS NULL)
           AND NOT (UPPER(COALESCE(secao,'')) LIKE '%LIMPEZA%'
-               OR  UPPER(COALESCE(secao,'')) LIKE '%FUNCIONARIO%')
+               OR  UPPER(COALESCE(secao,'')) LIKE '%FUNCION%')
         GROUP BY unidade_id
     """, db, params=[periodo])
     db.close()

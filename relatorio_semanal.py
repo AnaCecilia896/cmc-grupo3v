@@ -1044,9 +1044,11 @@ def load_estoque_atual(uid, data_contagem: str = None):
 @st.cache_data(ttl=120)
 def load_estoque_contagem_anterior(uid: int, data_atual: str) -> pd.DataFrame:
     """
-    Retorna DataFrame {insumo_id, qtd_estoque_ant, valor_estoque_ant} da contagem
-    imediatamente anterior a data_atual.
-    Usa o mesmo cálculo de custo médio de load_estoque_atual.
+    Retorna DataFrame {sku_item_id, qtd_estoque_ant} da contagem imediatamente
+    anterior a data_atual. O casamento com a contagem atual é feito por
+    sku_item_id — o insumo_id NÃO é estável entre importações de contagem
+    (o mesmo produto pode receber insumo_id diferente a cada import).
+    O valor (R$) é calculado no chamador usando o custo médio atual.
     Retorna DataFrame vazio se não houver contagem anterior.
     """
     db = conn()
@@ -1057,22 +1059,15 @@ def load_estoque_contagem_anterior(uid: int, data_atual: str) -> pd.DataFrame:
     data_ant = row[0] if row else None
     if not data_ant:
         db.close()
-        return pd.DataFrame(columns=["insumo_id", "qtd_estoque_ant", "valor_estoque_ant"])
+        return pd.DataFrame(columns=["sku_item_id", "qtd_estoque_ant"])
 
     df = pd.read_sql("""
-        SELECT ct.insumo_id,
-               ct.quantidade AS qtd_estoque_ant,
-               ct.quantidade * COALESCE(p.cm, 0) AS valor_estoque_ant
-        FROM contagens ct
-        LEFT JOIN (
-            SELECT insumo_id, SUM(valor_total) / NULLIF(SUM(quantidade), 0) AS cm
-            FROM compras WHERE unidade_id=? AND valor_total > 0 AND quantidade > 0
-            GROUP BY insumo_id
-        ) p ON p.insumo_id = ct.insumo_id
-        WHERE ct.unidade_id=? AND ct.data=?
-    """, db, params=[uid, uid, data_ant])
+        SELECT sku_item_id, SUM(quantidade) AS qtd_estoque_ant
+        FROM contagens
+        WHERE unidade_id=? AND data=? AND sku_item_id IS NOT NULL
+        GROUP BY sku_item_id
+    """, db, params=[uid, data_ant])
     db.close()
-    df["insumo_id"] = pd.to_numeric(df["insumo_id"], errors="coerce").astype("Int64")
     return df
 
 
@@ -2767,13 +2762,14 @@ else:
     # ── EI / Compras / EF / Consumo por item ─────────────────────────────────
     df_full = df_e.copy()
     if not df_estoque_ant.empty:
-        df_full["insumo_id"] = pd.to_numeric(df_full["insumo_id"], errors="coerce").astype("Int64")
-        df_full = df_full.merge(df_estoque_ant, on="insumo_id", how="left")
-        df_full["valor_estoque_ant"] = df_full["valor_estoque_ant"].fillna(0)
-        df_full["qtd_estoque_ant"]   = df_full["qtd_estoque_ant"].fillna(0)
+        # Casa o estoque inicial (EI) por sku_item_id — insumo_id não é estável
+        # entre importações de contagem (overlap pode ser zero).
+        df_full = df_full.merge(df_estoque_ant, on="sku_item_id", how="left")
+        df_full["qtd_estoque_ant"] = df_full["qtd_estoque_ant"].fillna(0)
     else:
-        df_full["valor_estoque_ant"] = 0.0
-        df_full["qtd_estoque_ant"]   = 0.0
+        df_full["qtd_estoque_ant"] = 0.0
+    # Valor do EI no custo médio atual (consistente com o EF)
+    df_full["valor_estoque_ant"] = df_full["qtd_estoque_ant"] * df_full["custo_medio"]
 
     # Compras por insumo entre a contagem anterior e a atual (valor E quantidade)
     _data_ei_est = None

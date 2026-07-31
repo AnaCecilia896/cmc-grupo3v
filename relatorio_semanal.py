@@ -1297,6 +1297,16 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
     Compara consumo teórico (PDV × fator) vs consumo real (EI + Compras − EF)
     para os insumo_ids fornecidos, no intervalo [data_ini, data_fim].
     ei_data / ef_data = datas das contagens que delimitam o período.
+
+    O Atlas renomeia produtos ao longo do tempo (ex.: "Hamburguer Angus 160G
+    |Und|" → "HAMBURGUER ANGUS 160G |UND|"), e como contagens/compras casam
+    insumo_id por nome exato, cada renomeação cria um insumo_id NOVO para o
+    mesmo produto físico — o insumo_id mapeado em venda_direta_pdv_map fica
+    "congelado" na grafia antiga e some das contagens atuais ("Sem contagem").
+    O sku_item_id (UUID do Atlas) é estável através de renomeações, então
+    resolvemos a "família" de insumo_ids que compartilham o mesmo sku_item_id
+    e buscamos EI/EF/Compras somando todos os apelidos da família.
+
     Retorna DataFrame com colunas:
       proteina, n_pratos, consumo_teo, ei_qty, compras_qty, ef_qty,
       consumo_real, desvio, custo_medio, desvio_rs, tem_contagem
@@ -1318,7 +1328,54 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
         db.close()
         return pd.DataFrame()
 
-    prot_ids_sql = f"({','.join(str(x) for x in proteinas['insumo_id'].tolist())})"
+    seed_ids = [int(x) for x in proteinas["insumo_id"].tolist()]
+    prot_ids_sql = f"({','.join(str(x) for x in seed_ids)})"
+
+    # ── Resolve sku_item_id mais recente de cada insumo_id "semente" ──────────
+    # (contagens e compras de QUALQUER unidade — o catálogo de SKUs do Atlas
+    # é compartilhado entre as unidades do grupo, então o mesmo sku_item_id
+    # aparece em produtos de restaurantes diferentes sem colisão de sentido).
+    sku_hist = pd.read_sql(f"""
+        SELECT insumo_id, sku_item_id, data FROM contagens
+        WHERE insumo_id IN {prot_ids_sql} AND sku_item_id IS NOT NULL
+        UNION ALL
+        SELECT insumo_id, sku_item_id, data FROM compras
+        WHERE insumo_id IN {prot_ids_sql} AND sku_item_id IS NOT NULL
+    """, db)
+    seed_sku: dict[int, str] = {}
+    if not sku_hist.empty:
+        for iid, grp in sku_hist.sort_values("data").groupby("insumo_id"):
+            seed_sku[int(iid)] = grp.iloc[-1]["sku_item_id"]
+
+    # ── Para cada sku resolvido, busca TODOS os insumo_id (apelidos) que ─────
+    # compartilham esse mesmo sku_item_id, em qualquer unidade.
+    alias_para_seed: dict[int, int] = {pid: pid for pid in seed_ids}
+    skus_unicos = sorted(set(seed_sku.values()))
+    if skus_unicos:
+        placeholders = ",".join("?" for _ in skus_unicos)
+        alias_rows = pd.read_sql(f"""
+            SELECT DISTINCT insumo_id, sku_item_id FROM contagens
+            WHERE sku_item_id IN ({placeholders}) AND insumo_id IS NOT NULL
+            UNION
+            SELECT DISTINCT insumo_id, sku_item_id FROM compras
+            WHERE sku_item_id IN ({placeholders}) AND insumo_id IS NOT NULL
+        """, db, params=skus_unicos + skus_unicos)
+        sku_para_seed = {sku: seed for seed, sku in seed_sku.items()}
+        for _, r in alias_rows.iterrows():
+            seed = sku_para_seed.get(r["sku_item_id"])
+            if seed is not None:
+                alias_para_seed[int(r["insumo_id"])] = seed
+
+    search_ids = sorted(alias_para_seed.keys())
+    search_ids_sql = f"({','.join(str(x) for x in search_ids)})"
+
+    def _remap_soma(df: pd.DataFrame, col_valor: str) -> pd.DataFrame:
+        """Remapeia insumo_id (apelido) → insumo_id semente e soma por semente."""
+        if df.empty:
+            return pd.DataFrame(columns=["insumo_id", col_valor])
+        out = df.copy()
+        out["insumo_id"] = out["insumo_id"].map(alias_para_seed)
+        return out.groupby("insumo_id", as_index=False)[col_valor].sum()
 
     # ── Consumo teórico: vendas × fator ──────────────────────────────────────
     teo = pd.read_sql(f"""
@@ -1332,22 +1389,23 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
         GROUP BY m.insumo_id
     """, db)
 
-    # ── EI / EF em unidades ───────────────────────────────────────────────────
+    # ── EI / EF em unidades — soma todos os apelidos da família ──────────────
     def _qty(data_contagem):
         if not data_contagem:
             return pd.DataFrame(columns=["insumo_id", "qty"])
-        return pd.read_sql(f"""
+        raw = pd.read_sql(f"""
             SELECT insumo_id, quantidade AS qty
             FROM contagens
             WHERE unidade_id = {uid} AND data = '{data_contagem}'
-              AND insumo_id IN {prot_ids_sql}
+              AND insumo_id IN {search_ids_sql}
         """, db)
+        return _remap_soma(raw, "qty")
 
     ei_df = _qty(ei_data).rename(columns={"qty": "ei_qty"})
     ef_df = _qty(ef_data).rename(columns={"qty": "ef_qty"})
 
-    # ── Compras em unidades no período (busca por ID e por nome) ─────────────
-    # Cobre duplicatas: mesmo produto com IDs diferentes no banco
+    # ── Compras no período — soma por família de apelidos, com fallback ──────
+    # por nome (token match) para itens sem sku_item_id resolvido.
     import re as _re
     _STOP = {'UND','KG','LT','ML','G','PORCIONADO','PORCAO','PROCESSADO','INDIVIDUAL','UN','DE','DO','DA','E'}
 
@@ -1377,10 +1435,11 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
 
         comp_rows = []
         for _, prow in proteinas.iterrows():
-            pid    = int(prow["insumo_id"])
-            tokens = _tokens(prow["proteina"])
+            pid     = int(prow["insumo_id"])
+            tokens  = _tokens(prow["proteina"])
+            familia = {a for a, s in alias_para_seed.items() if s == pid}
             matched = all_comp[
-                (all_comp["insumo_id"] == pid) |
+                all_comp["insumo_id"].isin(familia) |
                 all_comp["nome_insumo"].apply(lambda n: _match(n, tokens))
             ]
             qty = matched["qty"].sum()
@@ -1390,7 +1449,7 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
         all_comp = pd.DataFrame()
         comp_df  = pd.DataFrame(columns=["insumo_id", "compras_qty"])
 
-    # ── Custo médio por insumo (cobre duplicatas por nome) ───────────────────
+    # ── Custo médio por insumo (família de apelidos + fallback por nome) ─────
     custo_raw = pd.read_sql(f"""
         SELECT insumo_id, nome_insumo,
                SUM(valor_total) AS vt, SUM(quantidade) AS qt
@@ -1401,10 +1460,11 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
 
     custo_rows = []
     for _, prow in proteinas.iterrows():
-        pid    = int(prow["insumo_id"])
-        tokens = _tokens(prow["proteina"])
+        pid     = int(prow["insumo_id"])
+        tokens  = _tokens(prow["proteina"])
+        familia = {a for a, s in alias_para_seed.items() if s == pid}
         matched = custo_raw[
-            (custo_raw["insumo_id"] == pid) |
+            custo_raw["insumo_id"].isin(familia) |
             custo_raw["nome_insumo"].apply(lambda n: _match(n, tokens))
         ]
         tot_vt = matched["vt"].sum()
@@ -1426,13 +1486,19 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
            .merge(comp_df, on="insumo_id", how="left")
            .merge(custo_df, on="insumo_id", how="left"))
 
+    # tem_contagem = existe uma linha real de EI OU EF (mesmo que quantidade=0,
+    # que é um resultado de contagem válido — estoque genuinamente zerado).
+    # Precisa ser calculado ANTES do fillna, que preencheria com 0.0 tanto
+    # "contagem encontrada com valor zero" quanto "contagem não encontrada",
+    # tornando os dois casos indistinguíveis.
+    res["tem_contagem"] = res.get("ei_qty").notna() | res.get("ef_qty").notna()
+
     for col in ["consumo_teo", "ei_qty", "ef_qty", "compras_qty", "custo_medio"]:
         res[col] = res.get(col, 0.0).fillna(0.0)
 
     res["consumo_real"] = res["ei_qty"] + res["compras_qty"] - res["ef_qty"]
     res["desvio"]       = res["consumo_real"] - res["consumo_teo"]
     res["desvio_rs"]    = res["desvio"] * res["custo_medio"]
-    res["tem_contagem"] = (res["ei_qty"] + res["ef_qty"]) > 0
 
     return res[res["consumo_teo"] > 0].sort_values("consumo_teo", ascending=False).reset_index(drop=True)
 

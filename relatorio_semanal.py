@@ -1386,7 +1386,7 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
         return out.groupby("insumo_id", as_index=False)[col_valor].sum()
 
     # ── Consumo teórico: vendas × fator ──────────────────────────────────────
-    teo = pd.read_sql(f"""
+    teo_vendas = pd.read_sql(f"""
         SELECT m.insumo_id,
                SUM(vp.quantidade * m.fator) AS consumo_teo
         FROM vendas_produtos vp
@@ -1396,6 +1396,26 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
           AND m.insumo_id IN {prot_ids_sql}
         GROUP BY m.insumo_id
     """, db)
+
+    # Cancelamentos com motivo != 'CANCELAMENTO SEM DESPERDÍCIO' consomem
+    # insumo (o prato foi produzido) mesmo sem gerar venda — somam ao
+    # consumo teórico. "Sem desperdício" = cancelado antes de produzir,
+    # não entra. Filtra só por motivo (não por situação), conforme definido
+    # com o usuário.
+    teo_cancel = pd.read_sql(f"""
+        SELECT m.insumo_id,
+               SUM(c.quantidade * m.fator) AS consumo_teo
+        FROM cancelamentos c
+        JOIN venda_direta_pdv_map m ON m.produto_pdv = c.produto
+        WHERE c.unidade_id = {uid}
+          AND c.data >= '{data_ini}' AND c.data <= '{data_fim}'
+          AND (c.motivo IS NULL OR c.motivo != 'CANCELAMENTO SEM DESPERDÍCIO')
+          AND m.insumo_id IN {prot_ids_sql}
+        GROUP BY m.insumo_id
+    """, db)
+
+    teo = (pd.concat([teo_vendas, teo_cancel], ignore_index=True)
+             .groupby("insumo_id", as_index=False)["consumo_teo"].sum())
 
     # ── EI / EF em unidades — soma todos os apelidos da família ──────────────
     def _qty(data_contagem):

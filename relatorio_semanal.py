@@ -562,26 +562,34 @@ def load_compras_semana(uid, periodo):
         "WHERE unidade_id=? AND periodo=? ORDER BY data_inicio",
         db, params=[uid, periodo]
     )
+
+    if semanas.empty:
+        db.close()
+        return pd.DataFrame(columns=["data_inicio", "data_fim", "comp", "em_transito"])
+
+    # Busca pelo intervalo real das semanas (não pelo mês do período) — a
+    # última semana pode se estender para o mês seguinte (ex.: 27/07–02/08)
+    # para fechar segunda→domingo, e compras dos dias extras precisam entrar.
+    _range_ini = semanas["data_inicio"].min()
+    _range_fim = semanas["data_fim"].max()
+
     # Compras efetivas (conferidas) — excluindo categorias operacionais
     compras_conf = pd.read_sql(
         f"SELECT data, SUM(valor_total) as comp "
-        f"FROM compras WHERE unidade_id=? AND strftime('%Y-%m', data)=? "
+        f"FROM compras WHERE unidade_id=? AND data>=? AND data<=? "
         f"AND valor_total>0 AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP} "
         f"GROUP BY data",
-        db, params=[uid, periodo]
+        db, params=[uid, _range_ini, _range_fim]
     )
     # Compras em trânsito — excluindo categorias operacionais
     compras_tran = pd.read_sql(
         f"SELECT data, SUM(valor_total) as em_transito "
-        f"FROM compras WHERE unidade_id=? AND strftime('%Y-%m', data)=? "
+        f"FROM compras WHERE unidade_id=? AND data>=? AND data<=? "
         f"AND valor_total>0 AND status_pedido='em_transito' {_SQL_EXCL_OP} "
         f"GROUP BY data",
-        db, params=[uid, periodo]
+        db, params=[uid, _range_ini, _range_fim]
     )
     db.close()
-
-    if semanas.empty:
-        return pd.DataFrame(columns=["data_inicio", "data_fim", "comp", "em_transito"])
 
     rows = []
     for _, s in semanas.iterrows():
@@ -1629,9 +1637,14 @@ def get_semanas_contagem(uid, periodo):
     Retorna lista de semanas calendário (segunda→domingo) dentro do período.
     Cada semana = (data_inicio, data_fim, ei_data, ef_data)
       - data_inicio : segunda-feira da semana (ou dia 1 se o mês não começa na segunda)
-      - data_fim    : domingo da semana, fim do mês ou hoje (o menor)
+      - data_fim    : domingo da semana, ou hoje se a semana ainda não fechou
       - ei_data     : última contagem semanal na data_inicio ou antes
       - ef_data     : primeira contagem semanal após data_fim (None = semana ainda aberta)
+
+    A ÚLTIMA semana do mês NÃO é truncada no fim do mês — ela se estende até
+    o domingo seguinte (mesmo cruzando para o mês seguinte), pois a análise
+    de meta de CMC exige semana completa segunda→domingo. Uma semana cortada
+    no meio (ex.: 27/07–31/07) subestima compras/faturamento daquela semana.
     """
     db = conn()
     ano, mes = int(periodo[:4]), int(periodo[5:7])
@@ -1654,9 +1667,10 @@ def get_semanas_contagem(uid, periodo):
     semanas = []
     ini = primeiro
     while ini <= min(ultimo, hoje_date):
-        # Fim da semana = próximo domingo, respeitando fim do mês e hoje
+        # Fim da semana = próximo domingo, respeitando apenas hoje (não o fim
+        # do mês — a última semana pode cruzar para o mês seguinte).
         dias_ate_dom = (6 - ini.weekday()) % 7
-        fim = min(ini + timedelta(days=dias_ate_dom), ultimo, hoje_date)
+        fim = min(ini + timedelta(days=dias_ate_dom), hoje_date)
         ini_str = ini.isoformat()
         fim_str = fim.isoformat()
 

@@ -1431,11 +1431,16 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
         return all(tok in cn for tok in tokens)
 
     if ei_data and ef_data:
+        # Contagens são feitas de manhã: representam o estoque no INÍCIO
+        # daquele dia. Compras do dia da EF ainda não foram "vistas" pela
+        # contagem (chegam depois da foto da manhã) e pertencem à próxima
+        # janela — por isso data >= ei_data (inclui o dia da EI) e
+        # data < ef_data (exclui o dia da EF), não '> ei' e '<= ef'.
         all_comp = pd.read_sql(f"""
             SELECT insumo_id, nome_insumo, SUM(quantidade) AS qty
             FROM compras
             WHERE unidade_id = {uid}
-              AND data > '{ei_data}' AND data <= '{ef_data}'
+              AND data >= '{ei_data}' AND data < '{ef_data}'
               AND quantidade > 0 AND valor_total > 0
               AND (status_pedido = 'conferido' OR status_pedido IS NULL)
             GROUP BY insumo_id, nome_insumo
@@ -2864,9 +2869,13 @@ else:
             # Casa compras por sku_item_id (UUID do SKU Atlas), pois nas unidades
             # Atlas o insumo_id costuma vir NULL — o match por insumo_id perdia
             # as compras e zerava as colunas de Compras/Consumo.
+            # Contagens são feitas de manhã (fotografia do início do dia):
+            # data >= EI inclui o dia da contagem inicial, data < EF exclui
+            # o dia da contagem final (compras desse dia ainda não foram
+            # "vistas" pela contagem e pertencem à próxima janela).
             _comp_item_df = pd.read_sql(
                 "SELECT sku_item_id, SUM(valor_total) AS comp_item, SUM(quantidade) AS comp_item_qtd "
-                "FROM compras WHERE unidade_id=? AND data>? AND data<=? "
+                "FROM compras WHERE unidade_id=? AND data>=? AND data<? "
                 f"AND valor_total>0 AND (status_pedido='conferido' OR status_pedido IS NULL) "
                 f"{_SQL_EXCL_OP} AND sku_item_id IS NOT NULL GROUP BY sku_item_id",
                 _db_est, params=[uid, _data_ei_est, data_estoque]

@@ -1810,10 +1810,21 @@ else:
         "SELECT MAX(data) FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=?",
         (uid, periodo)
     ).fetchone()[0]
+    # Janela de VENDAS/cancelamentos cobre o mês inteiro (todas as semanas
+    # em vendas_produtos), independente da última contagem disponível.
+    # Usar _prot_ef (última contagem) aqui excluiria semanas cujo intervalo
+    # se estende além dela — ex.: a última semana do mês fecha no domingo
+    # seguinte e pode passar da data da última contagem — subestimando o
+    # teórico de TODOS os insumos (a semana inteira some do cálculo).
+    # EI/EF continuam usando as datas de contagem (_prot_ei/_prot_ef), só
+    # a janela de vendas/cancelamentos é ampliada.
+    _vendas_range = _db_prot.execute(
+        "SELECT MIN(data_inicio), MAX(data_fim) FROM vendas_produtos WHERE unidade_id=? AND periodo=?",
+        (uid, periodo)
+    ).fetchone()
     _db_prot.close()
-    # Alinha vendas à janela das contagens disponíveis
-    _prot_ini  = _prot_ei or f"{periodo}-01"
-    _prot_fim  = _prot_ef or f"{periodo}-31"
+    _prot_ini  = (_vendas_range[0] if _vendas_range else None) or _prot_ei or f"{periodo}-01"
+    _prot_fim  = (_vendas_range[1] if _vendas_range else None) or _prot_ef or f"{periodo}-31"
 # Insumos analisados por setor (IDs do banco_central.db)
 _IDS_COZINHA = [1172, 1614, 1615, 1170, 1619, 1612, 234, 233, 442, 1164]
 # FILE MIGNON: 150g=1172, 130g=1614, 180g=1615, 100g=1170

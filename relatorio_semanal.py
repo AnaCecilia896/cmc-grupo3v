@@ -1457,13 +1457,13 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
         # janela — por isso data >= ei_data (inclui o dia da EI) e
         # data < ef_data (exclui o dia da EF), não '> ei' e '<= ef'.
         all_comp = pd.read_sql(f"""
-            SELECT insumo_id, nome_insumo, SUM(quantidade) AS qty
+            SELECT insumo_id, nome_insumo, sku_item_id, SUM(quantidade) AS qty
             FROM compras
             WHERE unidade_id = {uid}
               AND data >= '{ei_data}' AND data < '{ef_data}'
               AND quantidade > 0 AND valor_total > 0
               AND (status_pedido = 'conferido' OR status_pedido IS NULL)
-            GROUP BY insumo_id, nome_insumo
+            GROUP BY insumo_id, nome_insumo, sku_item_id
         """, db)
 
         comp_rows = []
@@ -1471,9 +1471,15 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
             pid     = int(prow["insumo_id"])
             tokens  = _tokens(prow["proteina"])
             familia = {a for a, s in alias_para_seed.items() if s == pid}
+            # Fallback por nome só entra para linhas SEM sku_item_id — quando
+            # há sku confiável, o match por nome (substring, sem limite de
+            # palavra) pode contaminar itens parecidos (ex.: "Heineken Long
+            # Neck" casava com "Heineken 00 Álcool Long Neck", pois os tokens
+            # do primeiro são subconjunto do segundo).
+            sem_sku = all_comp["sku_item_id"].isna() | (all_comp["sku_item_id"] == "")
             matched = all_comp[
                 all_comp["insumo_id"].isin(familia) |
-                all_comp["nome_insumo"].apply(lambda n: _match(n, tokens))
+                (sem_sku & all_comp["nome_insumo"].apply(lambda n: _match(n, tokens)))
             ]
             qty = matched["qty"].sum()
             comp_rows.append({"insumo_id": pid, "compras_qty": float(qty)})
@@ -1484,11 +1490,11 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
 
     # ── Custo médio por insumo (família de apelidos + fallback por nome) ─────
     custo_raw = pd.read_sql(f"""
-        SELECT insumo_id, nome_insumo,
+        SELECT insumo_id, nome_insumo, sku_item_id,
                SUM(valor_total) AS vt, SUM(quantidade) AS qt
         FROM compras
         WHERE unidade_id = {uid} AND valor_total > 0 AND quantidade > 0
-        GROUP BY insumo_id, nome_insumo
+        GROUP BY insumo_id, nome_insumo, sku_item_id
     """, db)
 
     custo_rows = []
@@ -1496,9 +1502,10 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
         pid     = int(prow["insumo_id"])
         tokens  = _tokens(prow["proteina"])
         familia = {a for a, s in alias_para_seed.items() if s == pid}
+        sem_sku = custo_raw["sku_item_id"].isna() | (custo_raw["sku_item_id"] == "")
         matched = custo_raw[
             custo_raw["insumo_id"].isin(familia) |
-            custo_raw["nome_insumo"].apply(lambda n: _match(n, tokens))
+            (sem_sku & custo_raw["nome_insumo"].apply(lambda n: _match(n, tokens)))
         ]
         tot_vt = matched["vt"].sum()
         tot_qt = matched["qt"].sum()
@@ -1802,14 +1809,31 @@ if semana_filtro:
     _prot_fim  = semana_filtro[1]
 else:
     _db_prot   = conn()
-    _prot_ei   = _db_prot.execute(
-        "SELECT MIN(data) FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=?",
-        (uid, periodo)
-    ).fetchone()[0]
-    _prot_ef   = _db_prot.execute(
-        "SELECT MAX(data) FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=?",
-        (uid, periodo)
-    ).fetchone()[0]
+    # Prioriza inventário mensal como EI/EF (mesma regra de calcular_cmv.py):
+    # o inventário de FECHAMENTO é feito na manhã do dia 1º do mês seguinte
+    # (representa o estoque no início daquele dia), então a busca precisa
+    # olhar um pouco além do mês calendário — senão o sistema usa a última
+    # contagem SEMANAL do próprio mês como EF, que é mais cedo que o
+    # fechamento real e distorce EI/EF/compras/consumo do mês inteiro.
+    _ano_p, _mes_p = int(periodo[:4]), int(periodo[5:7])
+    _prox_ano, _prox_mes = (_ano_p, _mes_p + 1) if _mes_p < 12 else (_ano_p + 1, 1)
+    _limite_sup = f"{_prox_ano:04d}-{_prox_mes:02d}-10"
+    _datas_inv = [r[0] for r in _db_prot.execute(
+        "SELECT DISTINCT data FROM contagens WHERE unidade_id=? AND data>=? AND data<=? "
+        "AND tipo='inventario_mensal' ORDER BY data",
+        (uid, f"{periodo}-01", _limite_sup)
+    ).fetchall()]
+    if len(_datas_inv) >= 2:
+        _prot_ei, _prot_ef = _datas_inv[0], _datas_inv[-1]
+    else:
+        _prot_ei = _db_prot.execute(
+            "SELECT MIN(data) FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=?",
+            (uid, periodo)
+        ).fetchone()[0]
+        _prot_ef = _db_prot.execute(
+            "SELECT MAX(data) FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=?",
+            (uid, periodo)
+        ).fetchone()[0]
     # Janela de VENDAS/cancelamentos cobre o mês inteiro (todas as semanas
     # em vendas_produtos), independente da última contagem disponível.
     # Usar _prot_ef (última contagem) aqui excluiria semanas cujo intervalo

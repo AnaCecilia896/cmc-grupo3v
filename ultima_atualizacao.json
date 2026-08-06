@@ -1,102 +1,10 @@
 {
-  "inicio": "2026-08-06 10:51:56",
-  "pid": 35152,
+  "inicio": "2026-08-06 13:00:04",
+  "pid": 2468,
   "periodos": [
     "2026-08",
     "2026-07"
   ],
-  "em_andamento": false,
-  "periodos_detalhes": {
-    "2026-08": {
-      "vmarket": {
-        "ok": 2,
-        "erros": [],
-        "timestamp": "2026-08-06 10:52:15"
-      },
-      "atlas": {
-        "ok": 6,
-        "erros": [],
-        "timestamp": "2026-08-06 10:52:41"
-      },
-      "contagens": {
-        "ok": true,
-        "inseridos": 455,
-        "atualizados": 0,
-        "erros": [],
-        "timestamp": "2026-08-06 11:14:45"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-08-06 11:15:13"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 1507,
-        "timestamp": "2026-08-06 11:15:41"
-      },
-      "cancelamentos": {
-        "ok": true,
-        "linhas": 484,
-        "timestamp": "2026-08-06 11:15:52"
-      },
-      "custos_receitas": {
-        "ok": true,
-        "calculados": 60,
-        "timestamp": "2026-08-06 11:15:58"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-08-06 11:16:04"
-      }
-    },
-    "2026-07": {
-      "vmarket": {
-        "ok": 2,
-        "erros": [],
-        "timestamp": "2026-08-06 11:16:10"
-      },
-      "atlas": {
-        "ok": 6,
-        "erros": [],
-        "timestamp": "2026-08-06 11:17:02"
-      },
-      "contagens": {
-        "ok": false,
-        "erro": "401 Client Error: Unauthorized for url: https://zouyezwghyellwdclrdy.supabase.co/rest/v1/stock_count_dates?restaurant_id=eq.bb307d5d-cec9-4c49-b504-0212d5e57a83&date=gte.2026-07-01&status=eq.finalizado&select=id%2Cdate%2Ctipo&order=date.asc%2Ctipo.asc&limit=500",
-        "timestamp": "2026-08-06 12:18:23"
-      },
-      "faturamento": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-08-06 12:18:45"
-      },
-      "produtos": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-08-06 12:18:54"
-      },
-      "cancelamentos": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-08-06 12:19:08"
-      },
-      "custos_receitas": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-08-06 12:19:20"
-      },
-      "cmv": {
-        "ok": false,
-        "erro": "database is locked",
-        "timestamp": "2026-08-06 12:19:29"
-      }
-    }
-  },
-  "git_push": {
-    "ok": true,
-    "timestamp": "2026-08-06 12:19:47"
-  },
-  "fim": "2026-08-06 12:19:47",
-  "duracao_segundos": 5270.3,
-  "sucesso": false
+  "em_andamento": true,
+  "periodos_detalhes": {}
 }

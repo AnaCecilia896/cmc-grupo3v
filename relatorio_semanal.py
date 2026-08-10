@@ -1677,12 +1677,22 @@ def get_semanas_contagem(uid, periodo):
     o domingo seguinte (mesmo cruzando para o mês seguinte), pois a análise
     de meta de CMC exige semana completa segunda→domingo. Uma semana cortada
     no meio (ex.: 27/07–31/07) subestima compras/faturamento daquela semana.
+
+    Pelo mesmo motivo, a PRIMEIRA semana deste mês não começa no dia 1 se
+    esses dias já foram cobertos pela última semana (estendida) do mês
+    anterior — senão os dois meses mostrariam a mesma semana duplicada
+    (ex.: 01–02/08 apareceria como semana de julho E de agosto).
     """
     db = conn()
     ano, mes = int(periodo[:4]), int(periodo[5:7])
     primeiro  = date(ano, mes, 1)
     ultimo    = date(ano, mes, calendar.monthrange(ano, mes)[1])
     hoje_date = date.today()
+
+    # Dias do início deste mês já cobertos pela semana final do mês anterior
+    _ultimo_ant = primeiro - timedelta(days=1)
+    _dias_ate_dom_ant = (6 - _ultimo_ant.weekday()) % 7
+    primeiro = max(primeiro, _ultimo_ant + timedelta(days=_dias_ate_dom_ant + 1))
 
     # Contagens semanais do mês anterior + atual + próximo (para encontrar ei/ef)
     mes_ant  = f"{ano}-{mes-1:02d}" if mes > 1 else f"{ano-1}-12"

@@ -1699,10 +1699,13 @@ def get_semanas_contagem(uid, periodo):
     semanas = []
     ini = primeiro
     while ini <= min(ultimo, hoje_date):
-        # Fim da semana = próximo domingo, respeitando apenas hoje (não o fim
-        # do mês — a última semana pode cruzar para o mês seguinte).
+        # Fim da semana = sempre o domingo seguinte (segunda→domingo completa),
+        # mesmo que a semana ainda esteja em andamento ou cruze o fim do mês —
+        # não trunca em "hoje": uma semana em curso precisa mostrar seu range
+        # natural (ex.: hoje=10/08 → S3 10/08–16/08, não 10/08–10/08), senão
+        # a label fica errada e a meta de compras parece ser de um único dia.
         dias_ate_dom = (6 - ini.weekday()) % 7
-        fim = min(ini + timedelta(days=dias_ate_dom), hoje_date)
+        fim = ini + timedelta(days=dias_ate_dom)
         ini_str = ini.isoformat()
         fim_str = fim.isoformat()
 

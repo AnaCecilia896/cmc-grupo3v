@@ -1876,9 +1876,13 @@ _IDS_BAR = [20, 18, 121, 122, 123, 124, 108, 107, 111, 486, 1, 299, 95, 96, 471,
 df_cozinha = load_desvios_setor(uid, _prot_ei, _prot_ef, _prot_ini, _prot_fim, _IDS_COZINHA)
 df_bar     = load_desvios_setor(uid, _prot_ei, _prot_ef, _prot_ini, _prot_fim, _IDS_BAR)
 
-# Estoque: usa a contagem de fechamento da semana selecionada (ef_data),
-# ou a contagem mais recente quando nenhuma semana é selecionada
-_ef_data_estoque = semana_filtro[3] if (semana_filtro and semana_filtro[3]) else None
+# Estoque: usa a contagem de fechamento da semana selecionada (ef_data);
+# em "Todas as semanas", usa o fechamento do PERÍODO selecionado (_prot_ef,
+# já calculado acima) — nunca a contagem mais recente do banco como um todo,
+# senão a aba de Estoque ignora o filtro de Período/Mês (ex.: mostraria
+# a contagem de agosto mesmo com julho selecionado).
+_ef_data_estoque = (semana_filtro[3] if (semana_filtro and semana_filtro[3])
+                     else _prot_ef)
 df_estoque, data_estoque = load_estoque_atual(uid, _ef_data_estoque)
 df_estoque_ant = load_estoque_contagem_anterior(uid, data_estoque) if data_estoque else pd.DataFrame(columns=["insumo_id", "valor_estoque_ant"])
 

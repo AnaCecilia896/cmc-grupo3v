@@ -1,35 +1,10 @@
 {
-  "inicio": "2026-08-10 14:19:07",
-  "pid": 30320,
+  "inicio": "2026-08-10 16:00:06",
+  "pid": 35068,
   "periodos": [
     "2026-08",
     "2026-07"
   ],
-  "em_andamento": false,
-  "periodos_detalhes": {
-    "2026-08": {
-      "vmarket": {"ok": 2, "erros": [], "timestamp": "2026-08-10 14:19:13"},
-      "atlas": {"ok": 6, "erros": [], "timestamp": "2026-08-10 15:20:00"},
-      "contagens": {"ok": true, "inseridos": 456, "atualizados": 0, "erros": [], "timestamp": "2026-08-10 15:22:00"},
-      "faturamento": {"ok": true, "timestamp": "2026-08-10 15:22:40"},
-      "produtos": {"ok": true, "linhas": 1892, "timestamp": "2026-08-10 15:23:20"},
-      "cancelamentos": {"ok": true, "linhas": 1008, "timestamp": "2026-08-10 15:23:35"},
-      "custos_receitas": {"ok": true, "calculados": 60, "timestamp": "2026-08-10 15:23:45"},
-      "cmv": {"ok": true, "timestamp": "2026-08-10 15:24:10"}
-    },
-    "2026-07": {
-      "vmarket": {"ok": 2, "erros": [], "timestamp": "2026-08-10 15:26:00"},
-      "atlas": {"ok": 6, "erros": [], "timestamp": "2026-08-10 15:26:30"},
-      "contagens": {"ok": true, "inseridos": 3624, "atualizados": 0, "erros": [], "timestamp": "2026-08-10 15:26:30"},
-      "faturamento": {"ok": true, "timestamp": "2026-08-10 15:28:04"},
-      "produtos": {"ok": true, "linhas": 5117, "timestamp": "2026-08-10 15:28:58"},
-      "cancelamentos": {"ok": true, "linhas": 3129, "timestamp": "2026-08-10 15:29:19"},
-      "custos_receitas": {"ok": true, "calculados": 60, "timestamp": "2026-08-10 15:29:24"},
-      "cmv": {"ok": true, "timestamp": "2026-08-10 15:29:52"}
-    }
-  },
-  "fim": "2026-08-10 15:29:52",
-  "duracao_segundos": 4485.0,
-  "sucesso": true,
-  "obs": "Rodado manualmente etapa-por-etapa apos travamento do pipeline agendado (etapa de contagens sem indice em sku_item_id, corrigido em database.py)."
+  "em_andamento": true,
+  "periodos_detalhes": {}
 }

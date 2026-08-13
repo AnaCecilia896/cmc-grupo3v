@@ -1298,6 +1298,19 @@ def salvar_meta_semanal(uid: int, data_inicio: str, data_fim: str, meta_valor: f
 
 
 @st.cache_data(ttl=120)
+def load_meta_peso_categoria(uid: int) -> dict:
+    """Retorna {categoria: peso_percentual} da unidade, para calcular a meta
+    de compras por categoria (meta_semana * peso / 100)."""
+    db = conn()
+    rows = db.execute(
+        "SELECT categoria, peso_percentual FROM meta_peso_categoria WHERE unidade_id=?",
+        (uid,)
+    ).fetchall()
+    db.close()
+    return {cat: float(peso) for cat, peso in rows}
+
+
+@st.cache_data(ttl=120)
 def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
                        data_ini: str, data_fim: str,
                        insumo_ids: list[int]) -> pd.DataFrame:
@@ -2597,6 +2610,15 @@ if semana_filtro:
     _fat_sem = float(_fat_sem_row["fat"].iloc[0]) if not _fat_sem_row.empty else 0.0
     cats_sem["pct"] = cats_sem["compras"] / _fat_sem * 100 if _fat_sem > 0 else 0
 
+    # Meta por categoria = orçamento total da semana (meta definida pelo
+    # master, ou fallback CMC% do faturamento — mesma regra do gráfico de
+    # Evolução) × peso (%) da categoria nessa unidade.
+    _meta_sem_total = metas_semanais.get(_s_ini, 0.0) or (_fat_sem * META_CMC / 100)
+    _pesos_cat = load_meta_peso_categoria(uid)
+    cats_sem["meta"] = cats_sem["categoria"].map(
+        lambda c: _meta_sem_total * _pesos_cat.get(c, 0.0) / 100
+    )
+
     secao(f"🔬 Compras por Categoria — {semana_sel}")
 
     if cats_sem.empty:
@@ -2627,10 +2649,15 @@ if semana_filtro:
             df_cats_show = cats_sem.copy()
             df_cats_show["Compras"] = df_cats_show["compras"].map("R$ {:,.0f}".format)
             df_cats_show["% Fat."]  = df_cats_show["pct"].map("{:.1f}%".format)
+            df_cats_show["Meta"]    = df_cats_show["meta"].map(
+                lambda v: "R$ {:,.0f}".format(v) if v > 0 else "—"
+            )
             st.dataframe(
-                df_cats_show[["categoria", "Compras", "% Fat."]].rename(columns={"categoria": "Categoria"}),
+                df_cats_show[["categoria", "Compras", "% Fat.", "Meta"]].rename(columns={"categoria": "Categoria"}),
                 use_container_width=True, hide_index=True, height=340
             )
+            if not _pesos_cat:
+                st.caption("⚠️ Peso de categoria ainda não cadastrado para esta unidade — Meta fica em branco até definir.")
 
         _tot_sem = cats_sem["compras"].sum()
         _cmc_sem = _tot_sem / _fat_sem * 100 if _fat_sem > 0 else 0

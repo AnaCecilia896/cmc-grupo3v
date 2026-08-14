@@ -4,6 +4,7 @@ Uso: streamlit run relatorio_semanal.py --server.port 8502
 """
 
 import sqlite3
+import io
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -421,6 +422,14 @@ def kpi(label, valor, meta_txt, cls, delta=""):
 
 def secao(titulo):
     st.markdown(f'<div class="secao">{titulo}</div>', unsafe_allow_html=True)
+
+def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Dados") -> bytes:
+    """Converte um DataFrame para .xlsx em memória — usuários acham mais
+    fácil de abrir do que CSV (sem se preocupar com separador/codificação)."""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    return buf.getvalue()
 
 def graf_layout(fig, height=300):
     fig.update_layout(
@@ -2880,10 +2889,11 @@ def _render_desvios(df_setor: pd.DataFrame, titulo: str, csv_key: str) -> None:
             for v in _dev_rs
         ]
         st.dataframe(df_show, use_container_width=True, hide_index=True)
-        _csv = df_show.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("⬇️ Baixar CSV", _csv,
-                           file_name=f"{csv_key}_{nome_sel}_{periodo}.csv",
-                           mime="text/csv", key=f"csv_{csv_key}_{uid}")
+        _xlsx = df_to_excel_bytes(df_show)
+        st.download_button("⬇️ Baixar Excel", _xlsx,
+                           file_name=f"{csv_key}_{nome_sel}_{periodo}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key=f"csv_{csv_key}_{uid}")
 
     if not _sem_contagem.empty:
         nomes_sc = ", ".join(_sem_contagem["proteina"].tolist())
@@ -3063,12 +3073,12 @@ else:
         expanded=True
     ):
         st.dataframe(df_show, use_container_width=True, hide_index=True)
-        _csv_est = df_show.to_csv(index=False).encode("utf-8-sig")
+        _xlsx_est = df_to_excel_bytes(df_show, sheet_name="Estoque")
         st.download_button(
-            "⬇️ Baixar CSV",
-            _csv_est,
-            file_name=f"estoque_{nome_sel}_{data_estoque or 'sem_data'}.csv",
-            mime="text/csv",
+            "⬇️ Baixar Excel",
+            _xlsx_est,
+            file_name=f"estoque_{nome_sel}_{data_estoque or 'sem_data'}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key=f"csv_estoque_{uid}",
         )
         st.markdown(
@@ -3100,12 +3110,12 @@ with st.expander(exp_label, expanded=False):
         df_c["V. Total"] = df_c["V. Total"].map("R$ {:,.2f}".format)
         df_c["Produto"]  = df_c["Produto"].str[:40]
         st.dataframe(df_c, use_container_width=True, hide_index=True)
-        _csv_comp = df_c.to_csv(index=False).encode("utf-8-sig")
+        _xlsx_comp = df_to_excel_bytes(df_c, sheet_name="Compras")
         st.download_button(
-            "⬇️ Baixar CSV",
-            _csv_comp,
-            file_name=f"compras_{nome_sel}_{periodo}.csv",
-            mime="text/csv",
+            "⬇️ Baixar Excel",
+            _xlsx_comp,
+            file_name=f"compras_{nome_sel}_{periodo}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key=f"csv_compras_{uid}",
         )
 _tab_compras.__exit__(None, None, None)

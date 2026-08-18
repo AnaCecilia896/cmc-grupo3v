@@ -1885,10 +1885,10 @@ else:
     _prot_ini  = (_vendas_range[0] if _vendas_range else None) or _prot_ei or f"{periodo}-01"
     _prot_fim  = (_vendas_range[1] if _vendas_range else None) or _prot_ef or f"{periodo}-31"
 # Insumos analisados por setor (IDs do banco_central.db)
-_IDS_COZINHA = [1172, 1614, 1615, 1170, 1619, 1612, 234, 233, 442, 1164]
+_IDS_COZINHA = [1172, 1614, 1615, 1170, 1619, 2171, 234, 233, 442, 1164]
 # FILE MIGNON: 150g=1172, 130g=1614, 180g=1615, 100g=1170
-# Frango 160g=1619, Chorizo=1612, Burger 160g=234, Burger 100g=233
-# Salmao 180g=442, Babybeef=1164
+# Frango 160g=1619, Baby Beef 180g=2171 (substituiu Chorizo=1612 no cardapio),
+# Burger 160g=234, Burger 100g=233, Salmao 180g=442, Babybeef 130g=1164
 _IDS_BAR = [20, 18, 121, 122, 123, 124, 108, 107, 111, 486, 1, 299, 95, 96, 471, 472]
 # Agua s/g=20, c/g=18, Coca KS orig=121, zero=122, 310ml orig=123, zero=124
 # Heineken LN=108, 00alc=107, Chaka=111, Pouca Roupa=486

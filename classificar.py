@@ -1,20 +1,22 @@
 """
-classificar.py — Classificação canônica de insumos pela categoria do Atlas.
+classificar.py — Classificação canônica de insumos pelo CÓDIGO Atlas.
 
-A fonte de verdade é o nome da categoria cadastrada no Atlas para o produto
-(sku_categories.name, ligado a cada sku_item). Isso já vem junto com a compra
-via sincronizar_atlas.py e é gravado em compras.secao — quando a linha tem
-full_code (veio do Atlas), secao É o nome real da categoria, não um texto
-livre a ser interpretado.
+A fonte de verdade é o full_code do SKU no Atlas (ex.: "10.112-672"): os 3
+dígitos entre o ponto e o traço identificam a categoria do produto (112 =
+Pescados) de forma estável — o código de um produto não muda, mesmo que o
+Atlas renomeie ou reescreva o nome da categoria (maiúsculas, acentos,
+abreviação) ao longo do tempo. Por isso o código é usado como identificador
+PRIMÁRIO (CAT_POR_CODIGO); o nome de categoria vindo de compras.secao
+(sku_categories.name) só é usado como fallback quando a linha não tem
+full_code (VMarket/XLSX legado) ou o código não está mapeado.
 
-O mapeamento por CÓDIGO (full_code, ex.: "10.112-672" → "112") só é usado
-como fallback quando uma linha do Atlas não trouxe sku_categories (produto
-sem categoria cadastrada). Classificação por palavra-chave no nome de seção
-é o último fallback, para linhas antigas sem código (ex.: VMarket/XLSX legado).
+Confirmado analisando os dados reais: um mesmo código sempre correspondeu à
+mesma categoria — as poucas linhas com nome divergente pro mesmo código são
+erros pontuais de digitação/seção no Atlas, não uma mudança real de código.
 
 Categorias operacionais (excluídas do CMV/CMC):
-  - "Material de Limpeza"
-  - "Alimentação Funcionários" / "Alim. Funcionarios"
+  - "301" = Material de Limpeza
+  - "400" = Alimentação Funcionários
 """
 import unicodedata
 
@@ -179,22 +181,24 @@ def normalizar_secao(secao) -> str:
 
 def classificar(full_code, secao) -> str:
     """
-    Categoria canônica de uma linha de compra.
+    Categoria canônica de uma linha de compra — CÓDIGO primeiro, sempre.
 
-    Quando full_code está presente, a linha veio do Atlas e secao já é o
-    nome REAL da categoria (sku_categories.name, capturado no mesmo join que
-    trouxe o full_code) — normaliza contra a grafia atual (o dado pode ter
-    sido capturado antes de uma renomeação no Atlas) e usa direto, sem
-    reinterpretar palavra por palavra. Só cai pro código numérico se o
-    produto não tiver categoria cadastrada no Atlas, e pro fallback por
-    palavra-chave quando a linha nem tem full_code (VMarket/XLSX legado).
+    O código (3 dígitos do full_code) é o identificador estável: se a linha
+    tem full_code e o código está em CAT_POR_CODIGO, essa é a categoria,
+    ponto final — não importa o que está escrito em secao (que pode ter
+    sido digitado/renomeado de formas diferentes ao longo do tempo). Só
+    olha para secao quando o código está ausente ou não é reconhecido:
+    primeiro tentando reconciliar contra a grafia atual do Atlas
+    (normalizar_categoria_atlas), depois por palavra-chave para linhas sem
+    nenhum vínculo com o cadastro Atlas (VMarket/XLSX legado).
     """
     tem_code = isinstance(full_code, str) and full_code.strip()
-    tem_secao = isinstance(secao, str) and secao.strip()
-    if tem_code and tem_secao:
-        return normalizar_categoria_atlas(secao)
     if tem_code:
         cat = categoria_por_codigo(full_code)
         if cat is not None:
             return cat
+
+    tem_secao = isinstance(secao, str) and secao.strip()
+    if tem_secao:
+        return normalizar_categoria_atlas(secao)
     return normalizar_secao(secao)

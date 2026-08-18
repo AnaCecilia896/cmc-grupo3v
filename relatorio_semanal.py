@@ -760,7 +760,7 @@ def load_compras_op(uid, data_ini, data_fim):
         cat = _classificar_codigo(cod, sec)
         if cat == "Material de Limpeza":
             limpeza   += float(tot or 0)
-        elif cat == "Alim. Funcionarios":
+        elif cat in CATS_OPERACIONAIS:  # "Alimentação Funcionários" (nome real do Atlas) + grafias antigas
             alim_func += float(tot or 0)
     return {"limpeza": limpeza, "uso_interno": alim_func}
 

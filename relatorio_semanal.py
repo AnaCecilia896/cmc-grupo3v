@@ -877,13 +877,14 @@ def load_quadro_compras(periodo: str,
     Retorna DataFrame com acompanhamento de compras por unidade.
     Inclui dados mensais e (opcionalmente) semanais.
     Colunas: nome, slug, fat_mes, comp_mes, em_trans_mes, cmc_mes,
-             comp_sem, em_trans_sem, fat_sem, cmc_sem,
+             comp_sem, em_trans_sem, fat_sem, cmc_sem, meta_sem, aderencia_sem,
              meta, meta_val, meta_val_fat,
              desvio, tendencia, semanas_dec, semanas_total,
              projecao
     """
     db  = conn()
     proj_dict = load_projecao_mensal(periodo)   # {slug: {...}}
+    metas_json = _load_metas_json() if (semana_inicio and semana_fim) else {}
     units = pd.read_sql("SELECT id, nome, slug FROM unidades ORDER BY nome", db)
 
     rows = []
@@ -922,7 +923,8 @@ def load_quadro_compras(periodo: str,
             (uid_u, periodo))
 
         # ── Semana ─────────────────────────────────────────────────
-        comp_sem = em_trans_sem = fat_sem = 0.0
+        comp_sem = em_trans_sem = fat_sem = meta_sem = 0.0
+        aderencia_sem = None
         if semana_inicio and semana_fim:
             comp_sem = _q(
                 f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
@@ -944,6 +946,12 @@ def load_quadro_compras(periodo: str,
                 f"WHERE unidade_id=? AND tipo='VENDA' "
                 f"AND data_inicio=? AND data_fim=? {fat_sem_filter}",
                 (uid_u, semana_inicio, semana_fim))
+
+            # Meta de compras da semana: usa a meta definida pelo master
+            # (mesma fonte do painel "Definir metas de compras por semana"),
+            # com fallback para CMC% da unidade sobre o faturamento da semana.
+            meta_sem = metas_json.get(f"{uid_u}:{semana_inicio}", 0.0) or (fat_sem * meta_pct / 100)
+            aderencia_sem = (comp_sem / meta_sem * 100) if meta_sem > 0 else None
 
         # ── Projeção e meta baseada na projeção ─────────────────────
         proj_info    = proj_dict.get(slug_u, {})
@@ -979,6 +987,7 @@ def load_quadro_compras(periodo: str,
             "meta_val_fat": meta_val,
             "comp_sem": comp_sem, "em_trans_sem": em_trans_sem,
             "fat_sem": fat_sem, "cmc_sem": cmc_sem,
+            "meta_sem": meta_sem, "aderencia_sem": aderencia_sem,
         })
 
     db.close()
@@ -2052,6 +2061,8 @@ else:
     tot_comp_s = df_quad["comp_sem"].sum()
     tot_fat_s  = df_quad["fat_sem"].sum()
     tot_cmc_s  = (tot_comp_s / tot_fat_s * 100) if tot_fat_s > 0 else 0.0
+    tot_meta_s = df_quad["meta_sem"].sum() if "meta_sem" in df_quad.columns else 0.0
+    tot_ader_s = (tot_comp_s / tot_meta_s * 100) if tot_meta_s > 0 else None
 
     _tem_projecao = tot_proj > 0   # True quando projeção da API já foi importada
 
@@ -2173,8 +2184,18 @@ else:
 
         sem_cells = ""
         if semana_filtro:
+            _ader = r["aderencia_sem"]
+            _meta_s = r["meta_sem"]
+            if _meta_s > 0:
+                _cor_ader = COR_BOM if _ader <= 100 else (COR_ATENC if _ader <= 110 else COR_CRIT)
+                _sub_meta = (f'<br><span style="font-size:10px;color:{VI_SECAO};">'
+                             f'Meta: R$ {_meta_s:,.0f}</span>'
+                             f'<br><span style="font-size:10px;color:{_cor_ader};font-weight:700;">'
+                             f'Aderência: {_ader:.0f}%</span>')
+            else:
+                _sub_meta = ""
             sem_cells = f"""
-          <td style="text-align:right;">R$ {r['comp_sem']:,.0f}</td>
+          <td style="text-align:right;">R$ {r['comp_sem']:,.0f}{_sub_meta}</td>
           <td style="text-align:center;">{_badge_cmc(r['cmc_sem'], r['meta'])}</td>"""
 
         rows_html += f"""
@@ -2197,8 +2218,16 @@ else:
     tot_sem_cells = ""
     if semana_filtro:
         tot_cmc_s_badge = _badge_cmc(tot_cmc_s if tot_fat_s > 0 else None, 28.0)
+        if tot_meta_s > 0:
+            _cor_ader_tot = COR_BOM if tot_ader_s <= 100 else (COR_ATENC if tot_ader_s <= 110 else COR_CRIT)
+            _tot_sub_meta = (f'<br><span style="font-size:10px;font-weight:400;color:{VI_SECAO};">'
+                              f'Meta: R$ {tot_meta_s:,.0f}</span>'
+                              f'<br><span style="font-size:10px;color:{_cor_ader_tot};">'
+                              f'Aderência: {tot_ader_s:.0f}%</span>')
+        else:
+            _tot_sub_meta = ""
         tot_sem_cells = f"""
-          <td style="text-align:right;font-weight:700;">R$ {tot_comp_s:,.0f}</td>
+          <td style="text-align:right;font-weight:700;">R$ {tot_comp_s:,.0f}{_tot_sub_meta}</td>
           <td style="text-align:center;">{tot_cmc_s_badge}</td>"""
 
     tot_cmc_badge  = _badge_cmc(tot_cmc if tot_fat > 0 else None, 28.0)

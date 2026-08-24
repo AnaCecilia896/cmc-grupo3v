@@ -1,31 +1,10 @@
 {
-  "inicio": "2026-08-24 10:29:13",
-  "pid": null,
+  "inicio": "2026-08-24 14:33:46",
+  "pid": 34272,
   "periodos": [
     "2026-08",
     "2026-07"
   ],
-  "em_andamento": false,
-  "periodos_detalhes": {
-    "2026-08": {
-      "contagens": {"ok": true, "inseridos": 1742, "atualizados": 0, "erros": []},
-      "faturamento": {"ok": true},
-      "produtos": {"ok": true, "linhas": 3259},
-      "cancelamentos": {"ok": true, "linhas": 2288},
-      "custos_receitas": {"ok": true, "calculados": 60},
-      "cmv": {"ok": true}
-    },
-    "2026-07": {
-      "contagens": {"ok": true, "inseridos": 0, "atualizados": 0, "erros": []},
-      "faturamento": {"ok": true},
-      "produtos": {"ok": true, "linhas": 4165},
-      "cancelamentos": {"ok": true, "linhas": 3108},
-      "custos_receitas": {"ok": true, "calculados": 60},
-      "cmv": {"ok": true}
-    }
-  },
-  "git_push": {"ok": true},
-  "fim": "2026-08-24 11:20:00",
-  "sucesso": true,
-  "obs": "Executado manualmente etapa-por-etapa apos o agendamento automatico das 10:29 travar (processo morreu sem liberar o lock)."
+  "em_andamento": true,
+  "periodos_detalhes": {}
 }

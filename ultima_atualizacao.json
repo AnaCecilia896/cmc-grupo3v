@@ -1,10 +1,24 @@
 {
-  "inicio": "2026-08-25 22:00:04",
-  "pid": 31912,
+  "inicio": "2026-08-26 13:00:20",
+  "pid": null,
   "periodos": [
-    "2026-08",
-    "2026-07"
+    "2026-08"
   ],
-  "em_andamento": true,
-  "periodos_detalhes": {}
+  "em_andamento": false,
+  "periodos_detalhes": {
+    "2026-08": {
+      "vmarket": {"ok": 2},
+      "atlas": {"ok": 6},
+      "contagens": {"ok": true, "inseridos": 0, "atualizados": 0},
+      "faturamento": {"ok": true},
+      "produtos": {"ok": true, "linhas": 3824},
+      "cancelamentos": {"ok": true, "linhas": 2454},
+      "custos_receitas": {"ok": true, "calculados": 60},
+      "cmv": {"ok": true}
+    }
+  },
+  "git_push": {"ok": true},
+  "fim": "2026-08-26 14:20:00",
+  "sucesso": true,
+  "obs": "Agendamento das 13:00 travou (processo morreu sem terminar), deixando compras congeladas e o CMC% distorcido frente ao faturamento ao vivo. Resincronizado manualmente compras/faturamento/produtos/cancelamentos/cmv de agosto."
 }

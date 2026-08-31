@@ -2646,16 +2646,28 @@ if semana_filtro:
     # Faturamento da semana selecionada (nao do mes todo)
     _fat_sem_row = df_fat_sem[df_fat_sem["data_inicio"] == _s_ini] if not df_fat_sem.empty else pd.DataFrame()
     _fat_sem = float(_fat_sem_row["fat"].iloc[0]) if not _fat_sem_row.empty else 0.0
-    cats_sem["pct"] = cats_sem["compras"] / _fat_sem * 100 if _fat_sem > 0 else 0
 
     # Meta por categoria = orçamento total da semana (meta definida pelo
     # master, ou fallback CMC% do faturamento — mesma regra do gráfico de
     # Evolução) × peso (%) da categoria nessa unidade.
     _meta_sem_total = metas_semanais.get(_s_ini, 0.0) or (_fat_sem * META_CMC / 100)
     _pesos_cat = load_meta_peso_categoria(uid)
+
+    # Garante uma linha pra toda categoria com peso cadastrado, mesmo sem
+    # nenhuma compra na semana — senão a meta dela nunca aparece na tabela,
+    # só as categorias que já compraram algo.
+    _cats_sem_compra = [c for c in _pesos_cat if c not in set(cats_sem["categoria"])]
+    if _cats_sem_compra:
+        cats_sem = pd.concat([
+            cats_sem,
+            pd.DataFrame({"categoria": _cats_sem_compra, "compras": 0.0}),
+        ], ignore_index=True)
+
+    cats_sem["pct"] = cats_sem["compras"] / _fat_sem * 100 if _fat_sem > 0 else 0
     cats_sem["meta"] = cats_sem["categoria"].map(
         lambda c: _meta_sem_total * _pesos_cat.get(c, 0.0) / 100
     )
+    cats_sem = cats_sem.sort_values("compras", ascending=False, ignore_index=True)
 
     secao(f"🔬 Compras por Categoria — {semana_sel}")
 
@@ -2665,7 +2677,9 @@ if semana_filtro:
         col_cat1, col_cat2 = st.columns([3, 2])
 
         with col_cat1:
-            df_plot = cats_sem.sort_values("compras", ascending=True).tail(12)
+            # Só categorias com compra real no gráfico — as sem compra ainda
+            # (mostradas na tabela ao lado, com a meta) não rendem barra.
+            df_plot = cats_sem[cats_sem["compras"] > 0].sort_values("compras", ascending=True).tail(12)
             fig2 = go.Figure(go.Bar(
                 x=df_plot["compras"],
                 y=df_plot["categoria"],

@@ -1,10 +1,28 @@
 {
-  "inicio": "2026-08-31 13:40:12",
-  "pid": 13736,
+  "inicio": "2026-08-31 14:50:00",
+  "pid": null,
   "periodos": [
     "2026-08",
     "2026-07"
   ],
-  "em_andamento": true,
-  "periodos_detalhes": {}
+  "em_andamento": false,
+  "periodos_detalhes": {
+    "2026-08": {
+      "vmarket": {"ok": 2},
+      "atlas": {"ok": 6},
+      "contagens": {"ok": true, "inseridos": 769, "atualizados": 0},
+      "faturamento": {"ok": true},
+      "produtos": {"ok": true, "linhas": 4356},
+      "cancelamentos": {"ok": true, "linhas": 3100},
+      "custos_receitas": {"ok": true, "calculados": 60},
+      "cmv": {"ok": true}
+    },
+    "2026-07": {
+      "contagens": {"ok": true, "inseridos": 0, "atualizados": 0}
+    }
+  },
+  "git_push": {"ok": true},
+  "fim": "2026-08-31 15:05:00",
+  "sucesso": true,
+  "obs": "Atualizacao manual: agosto fechado com inventario mensal de 31/08 para Asa Norte e Aguas Claras."
 }

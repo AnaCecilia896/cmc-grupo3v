@@ -74,12 +74,17 @@ def _get_token() -> str | None:
     return c.get("token")
 
 @st.cache_data(ttl=1800)
-def fetch_fat_api(periodo: str, slug: str = "asa-norte") -> dict | None:
+def fetch_fat_api(periodo: str, slug: str = "asa-norte", ei_data: str = None, ef_data: str = None) -> dict | None:
     """
     Busca faturamento_servico diário via API cantuccidados para o período YYYY-MM e slug.
     Quando o slug mapeia para múltiplas lojas, soma os valores diários.
     Retorna {"total": float, "por_dia": {"YYYY-MM-DD": float}} ou None se falhar.
     Cache de 30 min.
+
+    Se ei_data/ef_data forem informados (mesma regra do CMV — janela do
+    inventário, EI-inclusivo/EF-exclusivo), usa essa janela em vez do mês
+    calendário: o dia do fechamento (ef_data) pertence ao mês SEGUINTE, não
+    a este.
     """
     loja_cfg = LOJA_POR_SLUG.get(slug)
     if not loja_cfg:
@@ -97,8 +102,14 @@ def fetch_fat_api(periodo: str, slug: str = "asa-norte") -> dict | None:
 
     ano, mes = int(periodo[:4]), int(periodo[5:7])
     headers  = {"Authorization": f"Bearer {token}"}
-    primeiro = date(ano, mes, 1)
-    ultimo   = min(date(ano, mes, calendar.monthrange(ano, mes)[1]), date.today())
+    if ei_data:
+        primeiro = datetime.strptime(ei_data, "%Y-%m-%d").date()
+    else:
+        primeiro = date(ano, mes, 1)
+    if ef_data:
+        ultimo = min(datetime.strptime(ef_data, "%Y-%m-%d").date() - timedelta(days=1), date.today())
+    else:
+        ultimo = min(date(ano, mes, calendar.monthrange(ano, mes)[1]), date.today())
 
     dias = []
     d = primeiro
@@ -534,7 +545,8 @@ def load_compras_categoria_semana(uid: int, data_ini: str, data_fim: str) -> pd.
 def load_cmv_mes(uid, periodo):
     db = conn()
     df = pd.read_sql(
-        "SELECT categoria, estoque_inicial, compras, estoque_final, cmv_valor, faturamento, cmv_percentual "
+        "SELECT categoria, estoque_inicial, compras, estoque_final, cmv_valor, faturamento, cmv_percentual, "
+        "ei_data, ef_data "
         "FROM cmv_resumo WHERE unidade_id=? AND periodo=? ORDER BY cmv_valor DESC",
         db, params=[uid, periodo]
     )
@@ -661,29 +673,103 @@ def load_top_produtos(uid, periodo, n=15):
     return df
 
 @st.cache_data(ttl=120)
-def load_compras_mes(uid, periodo):
-    """Retorna apenas compras CONFERIDAS (efetivas) do mês, excluindo categorias operacionais."""
+def load_ei_ef_mes(uid, periodo):
+    """
+    Datas EI/EF do mês — mesma regra do CMV (calcular_cmv.py): prioriza
+    inventario_mensal (fechamento pode cair no dia 1º do mês seguinte),
+    cai para qualquer contagem do mês calendário. Lê de cmv_resumo quando
+    já calculado (fonte única, evita a lógica duplicada divergir); só
+    resolve ao vivo se o CMV do período ainda não foi gravado.
+    """
     db = conn()
-    df = pd.read_sql(
-        "SELECT sku_codigo, secao, nome_insumo, quantidade, valor_unitario, valor_total, fornecedor, data "
-        f"FROM compras WHERE unidade_id=? AND strftime('%Y-%m', data)=? AND valor_total>0 "
-        f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP} "
-        "ORDER BY data, valor_total DESC",
-        db, params=[uid, periodo]
-    )
+    r = db.execute(
+        "SELECT ei_data, ef_data FROM cmv_resumo WHERE unidade_id=? AND periodo=? AND categoria='TOTAL'",
+        (uid, periodo)
+    ).fetchone()
+    if r and r[0] and r[1]:
+        db.close()
+        return r[0], r[1]
+
+    # CMV do período ainda não foi calculado — resolve ao vivo (mesmo
+    # algoritmo de resolver_ei_ef em calcular_cmv.py). O EI pode ser o
+    # próprio fechamento do mês ANTERIOR (ex.: 31/08 fecha agosto E abre
+    # setembro), buscado numa janela de ~20 dias antes do mês para não
+    # pular um mês inteiro sem contagem mensal própria.
+    ano_p, mes_p = int(periodo[:4]), int(periodo[5:7])
+    prev_ano, prev_mes = (ano_p, mes_p - 1) if mes_p > 1 else (ano_p - 1, 12)
+    prox_ano, prox_mes = (ano_p, mes_p + 1) if mes_p < 12 else (ano_p + 1, 1)
+    limite_inf    = f"{prev_ano:04d}-{prev_mes:02d}-20"
+    limite_ei_sup = f"{periodo}-10"
+    limite_sup    = f"{prox_ano:04d}-{prox_mes:02d}-10"
+
+    todas_inv = [row[0] for row in db.execute(
+        "SELECT DISTINCT data FROM contagens WHERE unidade_id=? AND tipo='inventario_mensal' "
+        "AND data>=? AND data<=? ORDER BY data",
+        (uid, limite_inf, limite_sup)
+    ).fetchall()]
+    candidatos_ei = [d for d in todas_inv if d <= limite_ei_sup]
+    ei_inv = candidatos_ei[-1] if candidatos_ei else None
+    ef_inv = next((d for d in todas_inv if ei_inv and d > ei_inv), None)
+
+    ei_qq = ef_qq = None
+    if not ei_inv or not ef_inv:
+        datas_mes = [row[0] for row in db.execute(
+            "SELECT DISTINCT data FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=? ORDER BY data",
+            (uid, periodo)
+        ).fetchall()]
+        ei_qq = datas_mes[0] if datas_mes else None
+        ef_qq = datas_mes[-1] if datas_mes else None
+
+    db.close()
+    return (ei_inv or ei_qq), (ef_inv or ef_qq)
+
+@st.cache_data(ttl=120)
+def load_compras_mes(uid, periodo):
+    """Retorna apenas compras CONFERIDAS (efetivas) do mês, excluindo categorias
+    operacionais. Usa a janela EI/EF do inventário (mesma regra do CMV) em vez
+    do mês calendário, para que uma compra no dia do fechamento caia no mês
+    correto."""
+    ei_data, ef_data = load_ei_ef_mes(uid, periodo)
+    db = conn()
+    if ei_data and ef_data:
+        df = pd.read_sql(
+            "SELECT sku_codigo, secao, nome_insumo, quantidade, valor_unitario, valor_total, fornecedor, data "
+            f"FROM compras WHERE unidade_id=? AND data>=? AND data<? AND valor_total>0 "
+            f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP} "
+            "ORDER BY data, valor_total DESC",
+            db, params=[uid, ei_data, ef_data]
+        )
+    else:
+        df = pd.read_sql(
+            "SELECT sku_codigo, secao, nome_insumo, quantidade, valor_unitario, valor_total, fornecedor, data "
+            f"FROM compras WHERE unidade_id=? AND strftime('%Y-%m', data)=? AND valor_total>0 "
+            f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP} "
+            "ORDER BY data, valor_total DESC",
+            db, params=[uid, periodo]
+        )
     db.close()
     return df
 
 @st.cache_data(ttl=120)
 def load_em_transito_mes(uid, periodo) -> float:
-    """Retorna o valor total em trânsito (realizado/confirmado, não conferido) do mês."""
+    """Retorna o valor total em trânsito (realizado/confirmado, não conferido) do mês,
+    usando a mesma janela EI/EF do CMV."""
+    ei_data, ef_data = load_ei_ef_mes(uid, periodo)
     db = conn()
-    r = db.execute(
-        f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
-        f"WHERE unidade_id=? AND strftime('%Y-%m', data)=? "
-        f"AND valor_total>0 AND status_pedido='em_transito' {_SQL_EXCL_OP}",
-        (uid, periodo)
-    ).fetchone()
+    if ei_data and ef_data:
+        r = db.execute(
+            f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+            f"WHERE unidade_id=? AND data>=? AND data<? "
+            f"AND valor_total>0 AND status_pedido='em_transito' {_SQL_EXCL_OP}",
+            (uid, ei_data, ef_data)
+        ).fetchone()
+    else:
+        r = db.execute(
+            f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+            f"WHERE unidade_id=? AND strftime('%Y-%m', data)=? "
+            f"AND valor_total>0 AND status_pedido='em_transito' {_SQL_EXCL_OP}",
+            (uid, periodo)
+        ).fetchone()
     db.close()
     return float(r[0]) if r else 0.0
 
@@ -899,28 +985,51 @@ def load_quadro_compras(periodo: str,
             return float(r[0]) if r and r[0] is not None else 0.0
 
         # ── Mês ────────────────────────────────────────────────────
-        comp_mes = _q(
-            f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
-            f"WHERE unidade_id=? AND strftime('%Y-%m',data)=? "
-            f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP}",
-            (uid_u, periodo))
+        # Usa a janela EI/EF do inventário (mesma regra do CMV), não o mês
+        # calendário — uma compra/venda no dia do fechamento (ex.: 31/08 quando
+        # o inventário de fechamento de agosto é 01/09) cai no mês correto.
+        _ei_u, _ef_u = load_ei_ef_mes(uid_u, periodo)
 
-        em_trans_mes = _q(
-            f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
-            f"WHERE unidade_id=? AND strftime('%Y-%m',data)=? "
-            f"AND status_pedido='em_transito' {_SQL_EXCL_OP}",
-            (uid_u, periodo))
-
-        # Prefere linhas da API quando disponíveis (evita dupla contagem com dados do Sheets)
-        has_api_mes = _q(
-            "SELECT COUNT(*) FROM vendas_produtos "
-            "WHERE unidade_id=? AND periodo=? AND produto='Faturamento (API)'",
-            (uid_u, periodo)) > 0
-        fat_mes_filter = "AND produto='Faturamento (API)'" if has_api_mes else "AND produto!='Faturamento (API)'"
-        fat_mes = _q(
-            f"SELECT COALESCE(SUM(valor_total),0) FROM vendas_produtos "
-            f"WHERE unidade_id=? AND periodo=? AND tipo='VENDA' {fat_mes_filter}",
-            (uid_u, periodo))
+        if _ei_u and _ef_u:
+            comp_mes = _q(
+                f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+                f"WHERE unidade_id=? AND data>=? AND data<? "
+                f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP}",
+                (uid_u, _ei_u, _ef_u))
+            em_trans_mes = _q(
+                f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+                f"WHERE unidade_id=? AND data>=? AND data<? "
+                f"AND status_pedido='em_transito' {_SQL_EXCL_OP}",
+                (uid_u, _ei_u, _ef_u))
+            has_api_mes = _q(
+                "SELECT COUNT(*) FROM vendas_produtos "
+                "WHERE unidade_id=? AND data_inicio>=? AND data_inicio<? AND produto='Faturamento (API)'",
+                (uid_u, _ei_u, _ef_u)) > 0
+            fat_mes_filter = "AND produto='Faturamento (API)'" if has_api_mes else "AND produto!='Faturamento (API)'"
+            fat_mes = _q(
+                f"SELECT COALESCE(SUM(valor_total),0) FROM vendas_produtos "
+                f"WHERE unidade_id=? AND data_inicio>=? AND data_inicio<? AND tipo='VENDA' {fat_mes_filter}",
+                (uid_u, _ei_u, _ef_u))
+        else:
+            comp_mes = _q(
+                f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+                f"WHERE unidade_id=? AND strftime('%Y-%m',data)=? "
+                f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP}",
+                (uid_u, periodo))
+            em_trans_mes = _q(
+                f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
+                f"WHERE unidade_id=? AND strftime('%Y-%m',data)=? "
+                f"AND status_pedido='em_transito' {_SQL_EXCL_OP}",
+                (uid_u, periodo))
+            has_api_mes = _q(
+                "SELECT COUNT(*) FROM vendas_produtos "
+                "WHERE unidade_id=? AND periodo=? AND produto='Faturamento (API)'",
+                (uid_u, periodo)) > 0
+            fat_mes_filter = "AND produto='Faturamento (API)'" if has_api_mes else "AND produto!='Faturamento (API)'"
+            fat_mes = _q(
+                f"SELECT COALESCE(SUM(valor_total),0) FROM vendas_produtos "
+                f"WHERE unidade_id=? AND periodo=? AND tipo='VENDA' {fat_mes_filter}",
+                (uid_u, periodo))
 
         # ── Semana ─────────────────────────────────────────────────
         comp_sem = em_trans_sem = fat_sem = meta_sem = 0.0
@@ -1852,32 +1961,9 @@ if semana_filtro:
     _prot_ini  = semana_filtro[0]
     _prot_fim  = semana_filtro[1]
 else:
-    _db_prot   = conn()
-    # Prioriza inventário mensal como EI/EF (mesma regra de calcular_cmv.py):
-    # o inventário de FECHAMENTO é feito na manhã do dia 1º do mês seguinte
-    # (representa o estoque no início daquele dia), então a busca precisa
-    # olhar um pouco além do mês calendário — senão o sistema usa a última
-    # contagem SEMANAL do próprio mês como EF, que é mais cedo que o
-    # fechamento real e distorce EI/EF/compras/consumo do mês inteiro.
-    _ano_p, _mes_p = int(periodo[:4]), int(periodo[5:7])
-    _prox_ano, _prox_mes = (_ano_p, _mes_p + 1) if _mes_p < 12 else (_ano_p + 1, 1)
-    _limite_sup = f"{_prox_ano:04d}-{_prox_mes:02d}-10"
-    _datas_inv = [r[0] for r in _db_prot.execute(
-        "SELECT DISTINCT data FROM contagens WHERE unidade_id=? AND data>=? AND data<=? "
-        "AND tipo='inventario_mensal' ORDER BY data",
-        (uid, f"{periodo}-01", _limite_sup)
-    ).fetchall()]
-    if len(_datas_inv) >= 2:
-        _prot_ei, _prot_ef = _datas_inv[0], _datas_inv[-1]
-    else:
-        _prot_ei = _db_prot.execute(
-            "SELECT MIN(data) FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=?",
-            (uid, periodo)
-        ).fetchone()[0]
-        _prot_ef = _db_prot.execute(
-            "SELECT MAX(data) FROM contagens WHERE unidade_id=? AND strftime('%Y-%m',data)=?",
-            (uid, periodo)
-        ).fetchone()[0]
+    # EI/EF do mês: mesma regra do CMV (calcular_cmv.py), lida via load_ei_ef_mes
+    # (fonte única — prioriza inventario_mensal, evita a lógica duplicada divergir).
+    _prot_ei, _prot_ef = load_ei_ef_mes(uid, periodo)
     # Janela de VENDAS/cancelamentos cobre o mês inteiro (todas as semanas
     # em vendas_produtos), independente da última contagem disponível.
     # Usar _prot_ef (última contagem) aqui excluiria semanas cujo intervalo
@@ -1886,6 +1972,7 @@ else:
     # teórico de TODOS os insumos (a semana inteira some do cálculo).
     # EI/EF continuam usando as datas de contagem (_prot_ei/_prot_ef), só
     # a janela de vendas/cancelamentos é ampliada.
+    _db_prot   = conn()
     _vendas_range = _db_prot.execute(
         "SELECT MIN(data_inicio), MAX(data_fim) FROM vendas_produtos WHERE unidade_id=? AND periodo=?",
         (uid, periodo)
@@ -1951,6 +2038,8 @@ if has_cmv:
     ef_mes   = float(total["estoque_final"].iloc[0])
     cmv_val  = float(total["cmv_valor"].iloc[0])
     fat_db   = float(total["faturamento"].iloc[0])
+    _ei_data_mes = total["ei_data"].iloc[0] if "ei_data" in total.columns else None
+    _ef_data_mes = total["ef_data"].iloc[0] if "ef_data" in total.columns else None
 else:
     # Sem CMV calculado — usa faturamento de vendas_produtos (exclui linhas API)
     comp_mes = float(df_compras["valor_total"].sum()) if not df_compras.empty else 0.0
@@ -1963,11 +2052,12 @@ else:
     ).fetchone()
     r_fat.close()
     fat_db = float(_fat_row[0]) if _fat_row else 0.0
+    _ei_data_mes, _ef_data_mes = load_ei_ef_mes(uid, periodo)
 
 # API de faturamento em tempo real — para todas as unidades com loja mapeada
 if LOJA_POR_SLUG.get(SLUG_SEL):
     with st.spinner("Buscando faturamento atualizado…"):
-        api_data = fetch_fat_api(periodo, SLUG_SEL)
+        api_data = fetch_fat_api(periodo, SLUG_SEL, _ei_data_mes, _ef_data_mes)
     if api_data and api_data["total"] > 0:
         fat_real      = api_data["total"]
         fat_fonte     = "🟢 ao vivo"

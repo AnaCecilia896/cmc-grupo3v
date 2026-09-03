@@ -1574,6 +1574,35 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
     return res[res["consumo_teo"] > 0].sort_values("consumo_teo", ascending=False).reset_index(drop=True)
 
 
+@st.cache_data(ttl=120)
+def load_producao_cozinha(uid: int, data_ini: str | None = None, data_fim: str | None = None) -> pd.DataFrame:
+    """
+    Produção da cozinha (rendimento de matéria-prima → produto final),
+    alimentada por importar_producao_cozinha.py a partir dos formulários de
+    produção/porcionamento. Retorna vazio se a tabela ainda não existe (script
+    de importação nunca rodado) ou se a unidade não tiver dados.
+    """
+    db = conn()
+    try:
+        existe = db.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='producao_cozinha'"
+        ).fetchone()[0]
+        if not existe:
+            return pd.DataFrame()
+        sql = ("SELECT carimbo, casa, data, responsavel, fonte, materia_prima, produto_final, "
+               "peso_bruto_kg, peso_liquido_kg, porcoes_produzidas, kg_produzido, "
+               "perda_kg, apara_kg, observacao FROM producao_cozinha WHERE unidade_id=?")
+        params = [uid]
+        if data_ini:
+            sql += " AND data>=?"; params.append(data_ini)
+        if data_fim:
+            sql += " AND data<=?"; params.append(data_fim)
+        df = pd.read_sql(sql + " ORDER BY data", db, params=params)
+    finally:
+        db.close()
+    return df
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # INTERFACE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2024,8 +2053,8 @@ fat_proj = fat_proj_api if fat_proj_api > fat_real * 0.5 else fat_proj_linear
 _usa_proj_api = fat_proj_api > fat_real * 0.5
 
 # ── Abas principais ──────────────────────────────────────────────────────────
-_tab_grupo, _tab_resumo, _tab_compras, _tab_evolucao, _tab_estoque, _tab_vendas = st.tabs([
-    "📊 Grupo", "📌 Resumo", "🛒 Compras", "📅 Evolução", "📦 Estoque", "🍽️ Vendas",
+_tab_grupo, _tab_resumo, _tab_compras, _tab_evolucao, _tab_estoque, _tab_vendas, _tab_producao = st.tabs([
+    "📊 Grupo", "📌 Resumo", "🛒 Compras", "📅 Evolução", "📦 Estoque", "🍽️ Vendas", "🍳 Produção",
 ])
 _tab_grupo.__enter__()
 
@@ -3162,6 +3191,157 @@ with st.expander(exp_label, expanded=False):
             key=f"csv_compras_{uid}",
         )
 _tab_compras.__exit__(None, None, None)
+_tab_producao.__enter__()
+
+# ════════════════════════════════════════════════════════════════════════════
+# BLOCO 7 — Produção da Cozinha (rendimento de matéria-prima)
+# ════════════════════════════════════════════════════════════════════════════
+
+secao(f"🍳 Produção da Cozinha  ·  {_sem_label}")
+
+_prod_data_ini = _sem_ini if semana_filtro else f"{periodo}-01"
+_prod_data_fim = _sem_fim if semana_filtro else f"{periodo}-{calendar.monthrange(int(periodo[:4]), int(periodo[5:7]))[1]:02d}"
+df_producao = load_producao_cozinha(uid, _prod_data_ini, _prod_data_fim)
+
+if df_producao.empty:
+    st.info(
+        "Sem dados de produção da cozinha para esta unidade/período. "
+        "Os dados vêm dos formulários de produção (Italianos/Mané), importados via "
+        "`importar_producao_cozinha.py` — rode o script localmente pra carregar o banco."
+    )
+else:
+    # ── Totais (com deduplicação de contexto compartilhado) ──────────────────
+    # No form de Porcionamento do Mané, uma mesma resposta pode gerar mais de
+    # uma linha aqui (ex.: Chorizo 250g E 200g do mesmo lote) — peso bruto,
+    # perda e apara são do LOTE, não do produto, e viriam repetidos em cada
+    # linha. Pra não contar esses 3 valores em dobro nos totais, deduplica
+    # por (fonte, carimbo, peso_bruto_kg, perda_kg, apara_kg) antes de somar;
+    # kg produzido e porções são por produto e somam sem dedup.
+    _ctx_cols = ["fonte", "carimbo", "peso_bruto_kg", "perda_kg", "apara_kg"]
+    _df_ctx = df_producao.drop_duplicates(subset=_ctx_cols)
+
+    _tot_bruto  = _df_ctx["peso_bruto_kg"].sum()
+    _tot_perda  = _df_ctx["perda_kg"].sum()
+    _tot_apara  = _df_ctx["apara_kg"].sum()
+    _tot_kg     = df_producao["kg_produzido"].fillna(df_producao["peso_liquido_kg"]).sum()
+    _rendimento = (_tot_kg / _tot_bruto * 100) if _tot_bruto > 0 else None
+
+    pc1, pc2, pc3, pc4 = st.columns(4)
+    with pc1:
+        st.markdown(f"""
+        <div class="kpi">
+          <div class="kpi-label">Peso Bruto Total</div>
+          <div class="kpi-valor">{_tot_bruto:,.0f} kg</div>
+          <div class="kpi-meta">{_df_ctx['peso_bruto_kg'].notna().sum()} produções</div>
+        </div>""", unsafe_allow_html=True)
+    with pc2:
+        st.markdown(f"""
+        <div class="kpi">
+          <div class="kpi-label">Produzido (Líquido)</div>
+          <div class="kpi-valor">{_tot_kg:,.0f} kg</div>
+          <div class="kpi-meta">soma de todos os processados</div>
+        </div>""", unsafe_allow_html=True)
+    with pc3:
+        _cor_rend = COR_BOM if (_rendimento or 0) >= 70 else (COR_ATENC if (_rendimento or 0) >= 55 else COR_CRIT)
+        st.markdown(f"""
+        <div class="kpi" style="border-left-color:{_cor_rend}">
+          <div class="kpi-label">Rendimento Médio</div>
+          <div class="kpi-valor" style="color:{_cor_rend}">{f'{_rendimento:.1f}%' if _rendimento is not None else '—'}</div>
+          <div class="kpi-meta">produzido / peso bruto</div>
+        </div>""", unsafe_allow_html=True)
+    with pc4:
+        st.markdown(f"""
+        <div class="kpi">
+          <div class="kpi-label">Perda + Aparas</div>
+          <div class="kpi-valor">{(_tot_perda + _tot_apara):,.0f} kg</div>
+          <div class="kpi-meta">perda: {_tot_perda:,.0f} kg · aparas/aproveitável: {_tot_apara:,.0f} kg</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+    # ── Filtros ────────────────────────────────────────────────────────────
+    _fp1, _fp2, _fp3 = st.columns([2, 2, 2])
+    with _fp1:
+        _mp_disp = sorted(df_producao["materia_prima"].dropna().unique().tolist())
+        _mp_sel = st.multiselect("Matéria-prima", _mp_disp, default=[], key=f"prod_mp_{uid}",
+                                  placeholder="Todas")
+    with _fp2:
+        _casas_disp = sorted(df_producao["casa"].dropna().unique().tolist())
+        _casa_sel = st.multiselect("Casa", _casas_disp, default=[], key=f"prod_casa_{uid}",
+                                    placeholder="Todas") if _casas_disp else []
+    with _fp3:
+        _busca_prod = st.text_input("🔍 Buscar produto", "", key=f"prod_busca_{uid}")
+
+    df_prod_disp = df_producao.copy()
+    if _mp_sel:
+        df_prod_disp = df_prod_disp[df_prod_disp["materia_prima"].isin(_mp_sel)]
+    if _casa_sel:
+        df_prod_disp = df_prod_disp[df_prod_disp["casa"].isin(_casa_sel)]
+    if _busca_prod:
+        df_prod_disp = df_prod_disp[df_prod_disp["produto_final"].str.contains(_busca_prod, case=False, na=False)]
+
+    # ── Rendimento por matéria-prima (gráfico) ────────────────────────────────
+    if not df_prod_disp.empty and df_prod_disp["materia_prima"].notna().any():
+        _grp_ctx = df_prod_disp.drop_duplicates(subset=_ctx_cols).groupby("materia_prima", dropna=True)["peso_bruto_kg"].sum()
+        _grp_kg  = df_prod_disp.assign(_kg=df_prod_disp["kg_produzido"].fillna(df_prod_disp["peso_liquido_kg"])) \
+                                .groupby("materia_prima", dropna=True)["_kg"].sum()
+        _df_rend = pd.DataFrame({"bruto": _grp_ctx, "produzido": _grp_kg}).fillna(0)
+        _df_rend = _df_rend[_df_rend["bruto"] > 0]
+        _df_rend["rendimento"] = _df_rend["produzido"] / _df_rend["bruto"] * 100
+        _df_rend = _df_rend.sort_values("rendimento", ascending=True).reset_index()
+
+        if not _df_rend.empty:
+            fig_prod = px.bar(
+                _df_rend, x="rendimento", y="materia_prima", orientation="h",
+                text=_df_rend["rendimento"].map("{:.1f}%".format),
+                color_discrete_sequence=[COR_BOM],
+            )
+            fig_prod.update_traces(textposition="outside")
+            fig_prod.update_layout(yaxis_title="", xaxis_title="Rendimento (%)")
+            st.plotly_chart(graf_layout(fig_prod, height=max(220, 40 * len(_df_rend))), use_container_width=True)
+
+    # ── Tabela detalhada ───────────────────────────────────────────────────────
+    with st.expander(f"📋 Detalhe das produções — {len(df_prod_disp)} registros", expanded=False):
+        df_prod_show = df_prod_disp.copy()
+        df_prod_show["rendimento_pct"] = df_prod_show.apply(
+            lambda r: (r["kg_produzido"] if pd.notna(r["kg_produzido"]) else r["peso_liquido_kg"]) / r["peso_bruto_kg"] * 100
+            if pd.notna(r["peso_bruto_kg"]) and r["peso_bruto_kg"] > 0 else None,
+            axis=1,
+        )
+        _cols_show = ["data", "casa", "materia_prima", "produto_final", "peso_bruto_kg",
+                      "peso_liquido_kg", "kg_produzido", "porcoes_produzidas", "rendimento_pct",
+                      "perda_kg", "apara_kg", "responsavel"]
+        df_prod_show = df_prod_show[_cols_show]
+        df_prod_show.columns = ["Data", "Casa", "Matéria-Prima", "Produto Final", "P. Bruto (kg)",
+                                 "P. Líquido (kg)", "Produzido (kg)", "Porções", "Rendimento",
+                                 "Perda (kg)", "Aparas (kg)", "Responsável"]
+
+        def _fmt_kg_col(v):
+            return f"{v:g}" if pd.notna(v) else "—"
+
+        df_prod_show["Rendimento"] = df_prod_show["Rendimento"].map(
+            lambda v: f"{v:.1f}%" if pd.notna(v) else "—"
+        )
+        for _c in ["P. Bruto (kg)", "P. Líquido (kg)", "Produzido (kg)", "Porções", "Perda (kg)", "Aparas (kg)"]:
+            df_prod_show[_c] = df_prod_show[_c].map(_fmt_kg_col)
+        df_prod_show["Casa"] = df_prod_show["Casa"].fillna("—")
+        st.dataframe(df_prod_show, use_container_width=True, hide_index=True)
+        _xlsx_prod = df_to_excel_bytes(df_prod_show, sheet_name="Producao")
+        st.download_button(
+            "⬇️ Baixar Excel",
+            _xlsx_prod,
+            file_name=f"producao_cozinha_{nome_sel}_{periodo}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"xlsx_producao_{uid}",
+        )
+        st.markdown(
+            f'<div style="font-size:11px;color:{VI_SECAO};margin-top:4px;">'
+            f'Rendimento = Produzido (kg) / Peso Bruto (kg) &nbsp;|&nbsp; '
+            f'Perda = descarte/apara reportado no formulário &nbsp;|&nbsp; '
+            f'"Aparas" inclui, na planilha dos Italianos, as lascas aproveitáveis (não é só descarte)'
+            f'</div>', unsafe_allow_html=True
+        )
+_tab_producao.__exit__(None, None, None)
 
 # ── Rodapé ────────────────────────────────────────────────────────────────────
 

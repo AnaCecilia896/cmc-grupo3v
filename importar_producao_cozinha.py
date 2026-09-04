@@ -134,10 +134,16 @@ def _get_uid_map(db: sqlite3.Connection) -> dict[str, int]:
 
 def _resolve_unidade(nome_resposta: str, slugs_permitidos: list[str], uid_map: dict[str, int],
                       nomes_slug: dict[str, str]) -> tuple[str | None, int | None]:
-    """Casa a resposta livre de 'Qual unidade?' com um slug em slugs_permitidos."""
+    """Casa a resposta livre de 'Qual unidade?' com um slug em slugs_permitidos.
+    A resposta real vem com prefixo de marca (ex.: "Cantucci | Asa Norte"), por
+    isso o nome é comparado como SUBSTRING (não igualdade exata); e o slug é
+    comparado com hífen trocado por espaço, já que "asa-norte" nunca aparece
+    literalmente na resposta ("Asa Norte", com espaço)."""
     alvo = _norm_texto(nome_resposta)
     for slug in slugs_permitidos:
-        if _norm_texto(nomes_slug.get(slug, slug)) == alvo or _norm_texto(slug) in alvo:
+        nome_norm = _norm_texto(nomes_slug.get(slug, slug))
+        slug_norm = _norm_texto(slug.replace("-", " "))
+        if nome_norm == alvo or nome_norm in alvo or slug_norm in alvo:
             return slug, uid_map.get(slug)
     return None, None
 
@@ -236,7 +242,7 @@ _IT_COL = {
     "und_saltimboca": "Quantas unidades (UND) de FILE DE PEITO para SALTIMBOCA [PORCIONADO 180G] foram produzidas?",
     "und_nuggets": "Quantas unidades (UND) de NUGGETS [PORCIONADO 110G] foram produzidas?",
     "kg_saltimboca": "Quantos quilos (KG) de SALTIMBOCA [PORCIONADO 180G] foram produzidos?",
-    "kg_nuggets": "Quantos quilos (KG) de TIRINHAS DE FRANGO para NUGGETS [PORCIONADO 110G] foram produzidas?",
+    "kg_nuggets": "Quantas quilos (KG) de TIRINHAS DE FRANGO para NUGGETS [PORCIONADO 110G] foram produzidas?",
     "kg_cordon_bleu": "Quantos quilos (KG) de FRANGO CORDON BLEU [PORCIONADO 180G] foram produzidos?",
     "und_cordon_bleu": "Quantas unidades (UND) de FRANGO CORDON BLEU [PORCIONADO 180G] foram produzidos?",
     "lasca_total": "Qual foi o TOTAL de LASCAS (APROVEITAVEIS) gerada em quilos (KG) no final?",
@@ -351,9 +357,9 @@ _MC_COL = {
     "costela_crua": "Quantos KG de COSTELA [CRUA] foram utilizados?",
     "costela_assada": "Quantos KG de COSTELA [ASSADA] foram produzidos?",
     "peito_cru_brisket": "Quantos KG de PEITO BOVINO [CRU] foram utilizados?",
-    "brisket": "Quantos KG de BRISKET foram produzidos?(pesar após retirado do forno)",
+    "brisket": "Quantos KG de BRISKET foram produzidos? (pesar após retirado do forno)",
     "peito_cru_pastrami": "Quantos KG de PEITO BOVINO [CRU] foram colocados na cura?",
-    "pastrami": "Quantos KG de PASTRAMI foram produzidos?(pesar após retirado do forno)",
+    "pastrami": "Quantos KG de PASTRAMI foram produzidos? (pesar após retirado do forno)",
     "maminha_crua": "Quantos KG de MAMINHA [CRUA] foram defumados?",
     "maminha_defumada": "Quantos KG de MAMINHA DEFUMADA foram produzidos?",
 }

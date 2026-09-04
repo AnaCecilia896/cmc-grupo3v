@@ -75,6 +75,33 @@ PLANILHAS = {
 DESPERDICIO_SHEET_ID = "1qX36AZptjemPuwzoYq9n3QB7AD3NibhSizLXG9BtFKM"
 DESPERDICIO_ABA      = "Respostas ao formulário 1"
 
+# Planilhas de Produção da Cozinha (Google Forms → Sheets) — peso bruto/líquido,
+# porções produzidas e perdas por produção. Origem de dados da aba "🍳 Produção"
+# do Dash. slugs = unidades cobertas por cada planilha (ver PRODUCAO_UNIDADES).
+PRODUCAO_COZINHA_PLANILHAS = {
+    "italianos": {
+        "nome": "Italianos (Asa Norte / Asa Sul / Águas Claras)",
+        "sheet_id": "1h01nHXCXmsxv6ghC5YrPXeD9eFZIaYOtNHbWXVLUlbU",
+        "aba": "BASE DE DADOS",
+        "slugs": ["asa-norte", "asa-sul", "aguas-claras"],
+    },
+    "mane": {
+        "nome": "Mané (Superquadra Mané / Véi Chico Mané)",
+        "sheet_id": "1FbiUDs3uW5QNkdKfSKFIn057Rz4elZ3Et_Y0082BDeM",
+        "abas": {
+            "cozimento":     "CONTROLE DE COZIMENTO",
+            "porcionamento": "CONTROLE DE PORCIONAMENTO",
+        },
+        "slugs": ["mane"],
+    },
+    "spq-norte": {
+        "nome": "SPQ Norte",
+        "sheet_id": None,  # TODO: preencher quando o link for encontrado
+        "aba": None,
+        "slugs": ["spq-norte"],
+    },
+}
+
 # IDs das planilhas DRE por unidade (aba "Dados F360")
 # Preencher após receber os IDs
 DRE_PLANILHAS = {

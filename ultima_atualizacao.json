@@ -5,6 +5,98 @@
     "2026-09",
     "2026-08"
   ],
-  "em_andamento": true,
-  "periodos_detalhes": {}
+  "em_andamento": false,
+  "periodos_detalhes": {
+    "2026-09": {
+      "vmarket": {
+        "ok": 2,
+        "erros": [],
+        "timestamp": "2026-09-03 16:00:10"
+      },
+      "atlas": {
+        "ok": 6,
+        "erros": [],
+        "timestamp": "2026-09-03 16:00:37"
+      },
+      "contagens": {
+        "ok": true,
+        "inseridos": 0,
+        "atualizados": 0,
+        "erros": [],
+        "timestamp": "2026-09-03 16:00:41"
+      },
+      "faturamento": {
+        "ok": true,
+        "timestamp": "2026-09-03 16:00:55"
+      },
+      "produtos": {
+        "ok": true,
+        "linhas": 0,
+        "timestamp": "2026-09-03 16:00:59"
+      },
+      "cancelamentos": {
+        "ok": true,
+        "linhas": 166,
+        "timestamp": "2026-09-03 16:01:05"
+      },
+      "custos_receitas": {
+        "ok": true,
+        "calculados": 60,
+        "timestamp": "2026-09-03 16:01:13"
+      },
+      "cmv": {
+        "ok": true,
+        "timestamp": "2026-09-03 16:01:13"
+      }
+    },
+    "2026-08": {
+      "vmarket": {
+        "ok": 2,
+        "erros": [],
+        "timestamp": "2026-09-03 16:01:17"
+      },
+      "atlas": {
+        "ok": 6,
+        "erros": [],
+        "timestamp": "2026-09-03 16:01:54"
+      },
+      "contagens": {
+        "ok": true,
+        "inseridos": 0,
+        "atualizados": 0,
+        "erros": [],
+        "timestamp": "2026-09-03 16:03:35"
+      },
+      "faturamento": {
+        "ok": true,
+        "timestamp": "2026-09-03 16:05:00"
+      },
+      "produtos": {
+        "ok": true,
+        "linhas": 4990,
+        "timestamp": "2026-09-03 16:05:54"
+      },
+      "cancelamentos": {
+        "ok": true,
+        "linhas": 3155,
+        "timestamp": "2026-09-03 16:06:12"
+      },
+      "custos_receitas": {
+        "ok": true,
+        "calculados": 60,
+        "timestamp": "2026-09-03 16:06:22"
+      },
+      "cmv": {
+        "ok": true,
+        "timestamp": "2026-09-03 16:07:32"
+      }
+    }
+  },
+  "git_push": {
+    "ok": true,
+    "timestamp": "2026-09-03 16:07:56"
+  },
+  "fim": "2026-09-03 16:07:56",
+  "duracao_segundos": 471.2,
+  "sucesso": true
 }

@@ -1,102 +1,10 @@
 {
-  "inicio": "2026-09-08 13:31:20",
-  "pid": 12384,
+  "inicio": "2026-09-08 16:00:03",
+  "pid": 32724,
   "periodos": [
     "2026-09",
     "2026-08"
   ],
-  "em_andamento": false,
-  "periodos_detalhes": {
-    "2026-09": {
-      "vmarket": {
-        "ok": 2,
-        "erros": [],
-        "timestamp": "2026-09-08 13:31:29"
-      },
-      "atlas": {
-        "ok": 6,
-        "erros": [],
-        "timestamp": "2026-09-08 13:32:19"
-      },
-      "contagens": {
-        "ok": true,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [],
-        "timestamp": "2026-09-08 13:33:06"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-09-08 13:33:32"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 613,
-        "timestamp": "2026-09-08 13:33:48"
-      },
-      "cancelamentos": {
-        "ok": true,
-        "linhas": 626,
-        "timestamp": "2026-09-08 13:34:00"
-      },
-      "custos_receitas": {
-        "ok": true,
-        "calculados": 60,
-        "timestamp": "2026-09-08 13:34:14"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-09-08 13:35:02"
-      }
-    },
-    "2026-08": {
-      "vmarket": {
-        "ok": 2,
-        "erros": [],
-        "timestamp": "2026-09-08 13:35:08"
-      },
-      "atlas": {
-        "ok": 6,
-        "erros": [],
-        "timestamp": "2026-09-08 13:36:17"
-      },
-      "contagens": {
-        "ok": true,
-        "inseridos": 0,
-        "atualizados": 0,
-        "erros": [],
-        "timestamp": "2026-09-08 13:38:42"
-      },
-      "faturamento": {
-        "ok": true,
-        "timestamp": "2026-09-08 13:40:00"
-      },
-      "produtos": {
-        "ok": true,
-        "linhas": 5320,
-        "timestamp": "2026-09-08 13:40:57"
-      },
-      "cancelamentos": {
-        "ok": true,
-        "linhas": 3155,
-        "timestamp": "2026-09-08 13:41:18"
-      },
-      "custos_receitas": {
-        "ok": true,
-        "calculados": 60,
-        "timestamp": "2026-09-08 13:41:30"
-      },
-      "cmv": {
-        "ok": true,
-        "timestamp": "2026-09-08 13:42:25"
-      }
-    }
-  },
-  "git_push": {
-    "ok": true,
-    "timestamp": "2026-09-08 13:42:46"
-  },
-  "fim": "2026-09-08 13:42:46",
-  "duracao_segundos": 686.0,
-  "sucesso": true
+  "em_andamento": true,
+  "periodos_detalhes": {}
 }

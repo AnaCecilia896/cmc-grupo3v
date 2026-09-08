@@ -1858,10 +1858,21 @@ def get_semanas_contagem(uid, periodo):
     ultimo    = date(ano, mes, calendar.monthrange(ano, mes)[1])
     hoje_date = date.today()
 
-    # Dias do início deste mês já cobertos pela semana final do mês anterior
-    _ultimo_ant = primeiro - timedelta(days=1)
-    _dias_ate_dom_ant = (6 - _ultimo_ant.weekday()) % 7
-    primeiro = max(primeiro, _ultimo_ant + timedelta(days=_dias_ate_dom_ant + 1))
+    # Início real do período: mesma regra do CMV — a Semana 1 começa no dia do
+    # inventário de EI (load_ei_ef_mes), não no dia 1 calendário. Ex.: se o
+    # fechamento de agosto foi feito em 31/08, setembro (e sua Semana 1) já
+    # começa em 31/08, não em 01/09. O loop abaixo sempre fecha a semana no
+    # domingo seguinte (mesma lógica já usada pra última semana do mês), então
+    # a semana resultante fica correta mesmo quando a EI não cai numa segunda.
+    _ei_mes, _ = load_ei_ef_mes(uid, periodo)
+    if _ei_mes:
+        primeiro = date.fromisoformat(_ei_mes)
+    else:
+        # Fallback (sem CMV calculado ainda pro período): dias do início deste
+        # mês já cobertos pela semana final do mês anterior, por calendário.
+        _ultimo_ant = primeiro - timedelta(days=1)
+        _dias_ate_dom_ant = (6 - _ultimo_ant.weekday()) % 7
+        primeiro = max(primeiro, _ultimo_ant + timedelta(days=_dias_ate_dom_ant + 1))
 
     # Contagens semanais do mês anterior + atual + próximo (para encontrar ei/ef)
     mes_ant  = f"{ano}-{mes-1:02d}" if mes > 1 else f"{ano-1}-12"

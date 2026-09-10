@@ -675,11 +675,21 @@ def load_top_produtos(uid, periodo, n=15):
 @st.cache_data(ttl=120)
 def load_ei_ef_mes(uid, periodo):
     """
-    Datas EI/EF do mês — mesma regra do CMV (calcular_cmv.py): prioriza
-    inventario_mensal (fechamento pode cair no dia 1º do mês seguinte),
-    cai para qualquer contagem do mês calendário. Lê de cmv_resumo quando
-    já calculado (fonte única, evita a lógica duplicada divergir); só
-    resolve ao vivo se o CMV do período ainda não foi gravado.
+    Janela [ei, ef) de COMPRAS/FATURAMENTO do mês — mesma regra do CMV
+    (calcular_cmv.py: resolver_janela_periodo). NÃO é a data de estoque
+    (essa fica só em cmv_resumo.estoque_inicial/estoque_final, já em R$) —
+    é o intervalo usado pra filtrar compras/vendas por data.
+
+    Prioriza inventario_mensal (fechamento pode cair no dia 1º do mês
+    seguinte, ou no próprio último dia do mês). Quando não há inventário
+    mensal real de um dos lados (unidade só faz contagem semanal), cai pro
+    limite do MÊS CALENDÁRIO daquele lado — não pra data da última contagem
+    semanal avulsa, que deixaria um intervalo real de compras (entre duas
+    contagens semanais que não se encostam) de fora dos dois meses.
+
+    Lê de cmv_resumo quando já calculado (fonte única, evita a lógica
+    duplicada divergir); só resolve ao vivo se o CMV do período ainda não
+    foi gravado.
     """
     db = conn()
     r = db.execute(
@@ -691,10 +701,44 @@ def load_ei_ef_mes(uid, periodo):
         return r[0], r[1]
 
     # CMV do período ainda não foi calculado — resolve ao vivo (mesmo
-    # algoritmo de resolver_ei_ef em calcular_cmv.py). O EI pode ser o
-    # próprio fechamento do mês ANTERIOR (ex.: 31/08 fecha agosto E abre
-    # setembro), buscado numa janela de ~20 dias antes do mês para não
+    # algoritmo de resolver_janela_periodo em calcular_cmv.py). O EI pode
+    # ser o próprio fechamento do mês ANTERIOR (ex.: 31/08 fecha agosto E
+    # abre setembro), buscado numa janela de ~20 dias antes do mês para não
     # pular um mês inteiro sem contagem mensal própria.
+    ano_p, mes_p = int(periodo[:4]), int(periodo[5:7])
+    prev_ano, prev_mes = (ano_p, mes_p - 1) if mes_p > 1 else (ano_p - 1, 12)
+    prox_ano, prox_mes = (ano_p, mes_p + 1) if mes_p < 12 else (ano_p + 1, 1)
+    limite_inf    = f"{prev_ano:04d}-{prev_mes:02d}-20"
+    limite_ei_sup = f"{periodo}-10"
+    limite_sup    = f"{prox_ano:04d}-{prox_mes:02d}-10"
+
+    todas_inv = [row[0] for row in db.execute(
+        "SELECT DISTINCT data FROM contagens WHERE unidade_id=? AND tipo='inventario_mensal' "
+        "AND data>=? AND data<=? ORDER BY data",
+        (uid, limite_inf, limite_sup)
+    ).fetchall()]
+    candidatos_ei = [d for d in todas_inv if d <= limite_ei_sup]
+    ei_inv = candidatos_ei[-1] if candidatos_ei else None
+    ef_inv = next((d for d in todas_inv if ei_inv and d > ei_inv), None)
+
+    db.close()
+    ei_janela = ei_inv or f"{periodo}-01"
+    ef_janela = ef_inv or f"{prox_ano:04d}-{prox_mes:02d}-01"
+    return ei_janela, ef_janela
+
+@st.cache_data(ttl=120)
+def load_ei_ef_estoque_mes(uid, periodo):
+    """
+    Datas EI/EF de ESTOQUE do mês (mesma regra de resolver_ei_ef em
+    calcular_cmv.py) — o snapshot físico usado para comparar teórico x real
+    (load_desvios_setor, load_estoque_atual). Diferente de load_ei_ef_mes
+    (janela de compras/faturamento, que cai pro calendário quando não há
+    inventário mensal): aqui só faz sentido usar uma contagem REAL — não dá
+    pra inventar saldo de estoque numa data sem contagem, então o fallback é
+    a contagem mais antiga/recente de QUALQUER tipo no mês calendário, nunca
+    uma data calendário sem contagem nenhuma.
+    """
+    db = conn()
     ano_p, mes_p = int(periodo[:4]), int(periodo[5:7])
     prev_ano, prev_mes = (ano_p, mes_p - 1) if mes_p > 1 else (ano_p - 1, 12)
     prox_ano, prox_mes = (ano_p, mes_p + 1) if mes_p < 12 else (ano_p + 1, 1)
@@ -1858,18 +1902,33 @@ def get_semanas_contagem(uid, periodo):
     ultimo    = date(ano, mes, calendar.monthrange(ano, mes)[1])
     hoje_date = date.today()
 
-    # Início real do período: mesma regra do CMV — a Semana 1 começa no dia do
-    # inventário de EI (load_ei_ef_mes), não no dia 1 calendário. Ex.: se o
-    # fechamento de agosto foi feito em 31/08, setembro (e sua Semana 1) já
-    # começa em 31/08, não em 01/09. O loop abaixo sempre fecha a semana no
-    # domingo seguinte (mesma lógica já usada pra última semana do mês), então
-    # a semana resultante fica correta mesmo quando a EI não cai numa segunda.
-    _ei_mes, _ = load_ei_ef_mes(uid, periodo)
-    if _ei_mes:
-        primeiro = date.fromisoformat(_ei_mes)
+    # Início real do período: mesma regra do CMV — a Semana 1 começa no dia de
+    # um inventário MENSAL real de EI (não uma contagem semanal avulsa nem a
+    # janela de compras, que cai pro calendário "seco" quando não há
+    # inventário mensal — usar essa janela aqui reabriria a duplicação de
+    # semana entre meses vizinhos). Ex.: se o fechamento de agosto foi feito
+    # em 31/08, setembro (e sua Semana 1) já começa em 31/08, não em 01/09.
+    # O loop abaixo sempre fecha a semana no domingo seguinte (mesma lógica
+    # já usada pra última semana do mês), então a semana resultante fica
+    # correta mesmo quando a EI não cai numa segunda.
+    _prev_ano, _prev_mes = (ano, mes - 1) if mes > 1 else (ano - 1, 12)
+    _prox_ano, _prox_mes = (ano, mes + 1) if mes < 12 else (ano + 1, 1)
+    _limite_inf    = f"{_prev_ano:04d}-{_prev_mes:02d}-20"
+    _limite_ei_sup = f"{periodo}-10"
+    _limite_sup    = f"{_prox_ano:04d}-{_prox_mes:02d}-10"
+    _todas_inv = [row[0] for row in db.execute(
+        "SELECT DISTINCT data FROM contagens WHERE unidade_id=? AND tipo='inventario_mensal' "
+        "AND data>=? AND data<=? ORDER BY data",
+        (uid, _limite_inf, _limite_sup)
+    ).fetchall()]
+    _candidatos_ei = [d for d in _todas_inv if d <= _limite_ei_sup]
+    _ei_inv = _candidatos_ei[-1] if _candidatos_ei else None
+    if _ei_inv:
+        primeiro = date.fromisoformat(_ei_inv)
     else:
-        # Fallback (sem CMV calculado ainda pro período): dias do início deste
-        # mês já cobertos pela semana final do mês anterior, por calendário.
+        # Fallback (sem inventário mensal real pro período): dias do início
+        # deste mês já cobertos pela semana final do mês anterior, por
+        # calendário.
         _ultimo_ant = primeiro - timedelta(days=1)
         _dias_ate_dom_ant = (6 - _ultimo_ant.weekday()) % 7
         primeiro = max(primeiro, _ultimo_ant + timedelta(days=_dias_ate_dom_ant + 1))
@@ -2001,9 +2060,9 @@ if semana_filtro:
     _prot_ini  = semana_filtro[0]
     _prot_fim  = semana_filtro[1]
 else:
-    # EI/EF do mês: mesma regra do CMV (calcular_cmv.py), lida via load_ei_ef_mes
-    # (fonte única — prioriza inventario_mensal, evita a lógica duplicada divergir).
-    _prot_ei, _prot_ef = load_ei_ef_mes(uid, periodo)
+    # EI/EF de ESTOQUE do mês (não a janela de compras) — precisa ser uma
+    # contagem real, ver load_ei_ef_estoque_mes.
+    _prot_ei, _prot_ef = load_ei_ef_estoque_mes(uid, periodo)
     # Janela de VENDAS/cancelamentos cobre o mês inteiro (todas as semanas
     # em vendas_produtos), independente da última contagem disponível.
     # Usar _prot_ef (última contagem) aqui excluiria semanas cujo intervalo

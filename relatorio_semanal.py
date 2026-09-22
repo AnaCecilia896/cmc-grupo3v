@@ -1417,7 +1417,17 @@ def salvar_meta_semanal(uid: int, data_inicio: str, data_fim: str, meta_valor: f
     else:
         all_metas[key] = meta_valor
     ok, erro = _save_metas_json(all_metas)
-    st.cache_data.clear()
+    # NÃO chama st.cache_data.clear() aqui de propósito. _save_metas_json
+    # commita metas_semanais.json direto no GitHub — e esse commit sozinho já
+    # dispara um redeploy do Streamlit Cloud (o Cloud reage a qualquer commit
+    # na branch observada, não só a mudanças em banco_central.db). Se a MESMA
+    # sessão, no rerun deste callback, também limpa o cache e volta a bater em
+    # banco_central.db, cai bem na janela em que o Cloud pode estar trocando
+    # os arquivos do app — foi isso que causava sqlite3.OperationalError toda
+    # vez que alguém salvava uma meta. load_quadro_compras (única função
+    # cacheada que embute um valor de metas_semanais.json no resultado) só
+    # atualiza a aderência da semana em até 120s (seu próprio ttl) — atraso
+    # aceitável, bem melhor que o app quebrar.
     if ok:
         st.toast("✅ Meta salva com sucesso!", icon="✅")
     else:

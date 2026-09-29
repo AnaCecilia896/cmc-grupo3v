@@ -5,6 +5,7 @@ Uso: streamlit run relatorio_semanal.py --server.port 8502
 
 import sqlite3
 import time
+import functools
 import io
 import streamlit as st
 import pandas as pd
@@ -75,6 +76,7 @@ def _get_token() -> str | None:
     return c.get("token")
 
 @st.cache_data(ttl=1800)
+@_retry_db
 def fetch_fat_api(periodo: str, slug: str = "asa-norte", ei_data: str = None, ef_data: str = None) -> dict | None:
     """
     Busca faturamento_servico diário via API cantuccidados para o período YYYY-MM e slug.
@@ -425,6 +427,33 @@ def conn():
             time.sleep(0.3 * (tentativa + 1))
     raise ultimo_erro
 
+
+def _retry_db(fn):
+    """
+    Decorator pra funções de carga de dados (fica ABAIXO de @st.cache_data,
+    ou seja, cada tentativa executa de verdade — uma falha não é cacheada,
+    só o resultado bom no final entra no cache).
+
+    Mesma causa de conn() acima: mesmo quando a conexão abre normalmente, a
+    query em si pode cair na janela em que o Streamlit Cloud está trocando
+    os arquivos do app por um redeploy (disparado por QUALQUER commit —
+    pipeline automático ou salvar uma meta), vendo o banco parcialmente
+    escrito. Isso já derrubou o app em pontos diferentes (load_em_transito_mes,
+    load_desvios_setor) — cobrir só conn() não bastava, porque a query
+    seguinte, alguns milissegundos depois, ainda podia pegar a mesma janela.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        ultimo_erro = None
+        for tentativa in range(4):
+            try:
+                return fn(*args, **kwargs)
+            except (sqlite3.Error, pd.errors.DatabaseError) as e:
+                ultimo_erro = e
+                time.sleep(0.3 * (tentativa + 1))
+        raise ultimo_erro
+    return wrapper
+
 def _cls_cmv(v):
     if v <= META_CMV:            return "bom"
     if v <= META_CMV + 2:        return "atencao"
@@ -503,6 +532,7 @@ def normalizar_secao(s):
 # ── Dados ─────────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=300)
+@_retry_db
 def get_unidades():
     """Retorna lista de (slug, nome) de todas as unidades."""
     db = conn()
@@ -511,6 +541,7 @@ def get_unidades():
     return rows
 
 @st.cache_data(ttl=120)
+@_retry_db
 def get_uid(slug):
     db = conn()
     r = db.execute("SELECT id FROM unidades WHERE slug=?", (slug,)).fetchone()
@@ -518,6 +549,7 @@ def get_uid(slug):
     return r[0] if r else None
 
 @st.cache_data(ttl=120)
+@_retry_db
 def get_periodos():
     """
     Retorna lista de períodos disponíveis (YYYY-MM), ordenada do mais recente ao mais antigo.
@@ -539,6 +571,7 @@ def get_periodos():
     return [r[0] for r in rows]
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_compras_categoria_semana(uid: int, data_ini: str, data_fim: str) -> pd.DataFrame:
     """Compras por categoria para um intervalo de datas (visão semanal).
     Classifica por CÓDIGO Atlas (sku_codigo) com fallback por nome de seção."""
@@ -563,6 +596,7 @@ def load_compras_categoria_semana(uid: int, data_ini: str, data_fim: str) -> pd.
     return df.reset_index(drop=True)
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_cmv_mes(uid, periodo):
     db = conn()
     df = pd.read_sql(
@@ -575,6 +609,7 @@ def load_cmv_mes(uid, periodo):
     return df
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_fat_semanal(uid, periodo):
     db = conn()
     # Se a unidade tem linhas de API para o período, usa apenas elas (evita dupla contagem com Sheets)
@@ -593,6 +628,7 @@ def load_fat_semanal(uid, periodo):
     return df
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_compras_semana(uid, periodo):
     """
     Retorna compras agrupadas por semana separando 'conferido' e 'em_transito'.
@@ -648,6 +684,7 @@ def load_compras_semana(uid, periodo):
     return pd.DataFrame(rows)
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_estoque_por_semana(uid: int, datas_inicio: tuple) -> dict:
     """
     Retorna {data_inicio: valor_estoque} para cada data em datas_inicio.
@@ -681,6 +718,7 @@ def load_estoque_por_semana(uid: int, datas_inicio: tuple) -> dict:
 
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_top_produtos(uid, periodo, n=15):
     db = conn()
     df = pd.read_sql(
@@ -694,6 +732,7 @@ def load_top_produtos(uid, periodo, n=15):
     return df
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_ei_ef_mes(uid, periodo):
     """
     Datas EI/EF do mês — mesma regra do CMV (calcular_cmv.py): prioriza
@@ -745,6 +784,7 @@ def load_ei_ef_mes(uid, periodo):
     return (ei_inv or ei_qq), (ef_inv or ef_qq)
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_compras_mes(uid, periodo):
     """Retorna apenas compras CONFERIDAS (efetivas) do mês, excluindo categorias
     operacionais. Usa a janela EI/EF do inventário (mesma regra do CMV) em vez
@@ -772,6 +812,7 @@ def load_compras_mes(uid, periodo):
     return df
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_em_transito_mes(uid, periodo) -> float:
     """Retorna o valor total em trânsito (realizado/confirmado, não conferido) do mês,
     usando a mesma janela EI/EF do CMV."""
@@ -795,6 +836,7 @@ def load_em_transito_mes(uid, periodo) -> float:
     return float(r[0]) if r else 0.0
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_top_produtos_semana(uid, data_inicio, data_fim, n=15):
     """
     Top produtos para uma semana específica.
@@ -814,6 +856,7 @@ def load_top_produtos_semana(uid, data_inicio, data_fim, n=15):
     return df
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_semana_kpis(uid, data_inicio, data_fim):
     """Retorna faturamento e compras (conferidas + em_transito) de uma semana específica."""
     db = conn()
@@ -848,6 +891,7 @@ def load_semana_kpis(uid, data_inicio, data_fim):
     }
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_compras_op(uid, data_ini, data_fim):
     """Retorna compras de Material de Limpeza e Alimentação Funcionários no período.
     Classifica por CÓDIGO Atlas (sku_codigo) com fallback por nome de seção."""
@@ -873,6 +917,7 @@ def load_compras_op(uid, data_ini, data_fim):
 
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_grupo_cmc(periodo: str) -> pd.DataFrame:
     """
     Retorna DataFrame com todas as unidades: faturamento, compras VMarket (conferido), CMC%, meta, desvio.
@@ -918,6 +963,7 @@ def load_grupo_cmc(periodo: str) -> pd.DataFrame:
     return df
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_projecao_mensal(periodo: str) -> dict:
     """
     Retorna dict {slug: {projecao, meta_vendas, real_vendas, dias_com_dados, dias_faltantes}}
@@ -977,6 +1023,7 @@ def _semanas_mes(periodo: str) -> tuple[int, int]:
 
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_quadro_compras(periodo: str,
                         semana_inicio: str = None,
                         semana_fim: str = None) -> pd.DataFrame:
@@ -1125,6 +1172,7 @@ def load_quadro_compras(periodo: str,
 
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_estoque_atual(uid, data_contagem: str = None):
     """
     Retorna estoque com preço histórico e cobertura de estoque.
@@ -1198,6 +1246,7 @@ def load_estoque_atual(uid, data_contagem: str = None):
 
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_estoque_contagem_anterior(uid: int, data_atual: str) -> pd.DataFrame:
     """
     Retorna DataFrame {sku_item_id, qtd_estoque_ant} da contagem imediatamente
@@ -1228,6 +1277,7 @@ def load_estoque_contagem_anterior(uid: int, data_atual: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=120)
+@_retry_db
 def calcular_cmv_semana(uid: int, data_ini: str, data_fim: str,
                         ei_data: str, ef_data: str) -> dict:
     """
@@ -1418,6 +1468,7 @@ def _save_metas_json(metas: dict) -> tuple[bool, str]:
 
 
 @st.cache_data(ttl=60)
+@_retry_db
 def load_meta_semanal(uid: int, periodo: str) -> dict:
     """Retorna {data_inicio: meta_valor} para o período (lê do JSON persistido)."""
     all_metas = _load_metas_json()
@@ -1456,6 +1507,7 @@ def salvar_meta_semanal(uid: int, data_inicio: str, data_fim: str, meta_valor: f
 
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_meta_peso_categoria(uid: int) -> dict:
     """Retorna {categoria: peso_percentual} da unidade, para calcular a meta
     de compras por categoria (meta_semana * peso / 100)."""
@@ -1469,6 +1521,7 @@ def load_meta_peso_categoria(uid: int) -> dict:
 
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
                        data_ini: str, data_fim: str,
                        insumo_ids: list[int]) -> pd.DataFrame:
@@ -1715,6 +1768,7 @@ def load_desvios_setor(uid: int, ei_data: str | None, ef_data: str | None,
 
 
 @st.cache_data(ttl=120)
+@_retry_db
 def load_producao_cozinha(uid: int, data_ini: str | None = None, data_fim: str | None = None) -> pd.DataFrame:
     """
     Produção da cozinha (rendimento de matéria-prima → produto final),
@@ -1864,6 +1918,7 @@ _meta_cmc  = META_CMC_GRUPO.get(SLUG_SEL, META_CMC)
 
 # Semanas disponíveis — carregadas após uid
 @st.cache_data(ttl=120)
+@_retry_db
 def get_semanas_contagem(uid, periodo):
     """
     Retorna lista de semanas calendário (segunda→domingo) dentro do período.

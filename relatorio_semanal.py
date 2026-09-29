@@ -4,6 +4,7 @@ Uso: streamlit run relatorio_semanal.py --server.port 8502
 """
 
 import sqlite3
+import time
 import io
 import streamlit as st
 import pandas as pd
@@ -402,7 +403,27 @@ def _fmt_timestamp(ts: str | None) -> str:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def conn():
-    return sqlite3.connect(DB_FILE, check_same_thread=False)
+    """
+    Abre conexão com banco_central.db, com retry curto se o arquivo estiver
+    momentaneamente inconsistente. O Streamlit Cloud redeploya o app a cada
+    commit na branch observada (inclusive os automáticos do pipeline, 6x/dia,
+    e qualquer outro commit — não só mudanças no banco) — se uma query cair
+    bem na janela em que o Cloud está trocando os arquivos do app pelo novo
+    commit, sqlite3 pode ver o arquivo parcialmente escrito e estourar
+    OperationalError ("database disk image is malformed" / "disk I/O error").
+    Essa janela costuma durar bem menos de 1s, então algumas tentativas
+    curtas resolvem sem impacto perceptível no caso normal.
+    """
+    ultimo_erro = None
+    for tentativa in range(4):
+        try:
+            c = sqlite3.connect(DB_FILE, check_same_thread=False)
+            c.execute("SELECT 1")  # força uma leitura real agora, não só abrir o handle
+            return c
+        except sqlite3.Error as e:
+            ultimo_erro = e
+            time.sleep(0.3 * (tentativa + 1))
+    raise ultimo_erro
 
 def _cls_cmv(v):
     if v <= META_CMV:            return "bom"

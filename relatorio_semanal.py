@@ -22,6 +22,33 @@ from classificar import classificar as _classificar_codigo, CATS_OPERACIONAIS
 _DIR = os.path.dirname(os.path.abspath(__file__))
 STATUS_FILE = os.path.join(_DIR, "ultima_atualizacao.json")
 
+
+def _retry_db(fn):
+    """
+    Decorator pra funções de carga de dados (fica ABAIXO de @st.cache_data,
+    ou seja, cada tentativa executa de verdade — uma falha não é cacheada,
+    só o resultado bom no final entra no cache).
+
+    O Streamlit Cloud redeploya o app a cada commit na branch observada
+    (pipeline automático 6x/dia, ou salvar uma meta) — se uma query cair na
+    janela em que o Cloud está trocando os arquivos do app pelo novo commit,
+    vê o banco parcialmente escrito e estoura sqlite3.OperationalError ou
+    pandas.errors.DatabaseError. Já derrubou o app em pontos diferentes
+    (load_em_transito_mes, load_desvios_setor) — por isso fica aqui em cima,
+    definido antes de qualquer @st.cache_data que o use como decorator.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        ultimo_erro = None
+        for tentativa in range(4):
+            try:
+                return fn(*args, **kwargs)
+            except (sqlite3.Error, pd.errors.DatabaseError) as e:
+                ultimo_erro = e
+                time.sleep(0.3 * (tentativa + 1))
+        raise ultimo_erro
+    return wrapper
+
 # ── Integração cantuccidados.com.br ──────────────────────────────────────────
 CANTUCCI_API  = "https://cantuccidados.com.br/api"
 CANTUCCI_USER = "ana"
@@ -426,33 +453,6 @@ def conn():
             ultimo_erro = e
             time.sleep(0.3 * (tentativa + 1))
     raise ultimo_erro
-
-
-def _retry_db(fn):
-    """
-    Decorator pra funções de carga de dados (fica ABAIXO de @st.cache_data,
-    ou seja, cada tentativa executa de verdade — uma falha não é cacheada,
-    só o resultado bom no final entra no cache).
-
-    Mesma causa de conn() acima: mesmo quando a conexão abre normalmente, a
-    query em si pode cair na janela em que o Streamlit Cloud está trocando
-    os arquivos do app por um redeploy (disparado por QUALQUER commit —
-    pipeline automático ou salvar uma meta), vendo o banco parcialmente
-    escrito. Isso já derrubou o app em pontos diferentes (load_em_transito_mes,
-    load_desvios_setor) — cobrir só conn() não bastava, porque a query
-    seguinte, alguns milissegundos depois, ainda podia pegar a mesma janela.
-    """
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        ultimo_erro = None
-        for tentativa in range(4):
-            try:
-                return fn(*args, **kwargs)
-            except (sqlite3.Error, pd.errors.DatabaseError) as e:
-                ultimo_erro = e
-                time.sleep(0.3 * (tentativa + 1))
-        raise ultimo_erro
-    return wrapper
 
 def _cls_cmv(v):
     if v <= META_CMV:            return "bom"

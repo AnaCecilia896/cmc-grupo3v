@@ -610,6 +610,24 @@ def load_cmv_mes(uid, periodo):
 
 @st.cache_data(ttl=120)
 @_retry_db
+def load_cmv_real_oficial(uid, periodo):
+    """CMV real OFICIAL (fechamento) da unidade/competência, ou None. Publicado por
+    scripts_analise/publicar_cmv_real_oficial.py a partir de dados/cmv_real_oficial.json."""
+    db = conn()
+    try:
+        if not db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cmv_real_oficial'").fetchone()[0]:
+            return None
+        r = db.execute("SELECT cmv, ei, ef, compras, fat_financeiro, contagem_ini, contagem_fim "
+                       "FROM cmv_real_oficial WHERE unidade_id=? AND periodo=?", (uid, periodo)).fetchone()
+    finally:
+        db.close()
+    if not r:
+        return None
+    return {"cmv": float(r[0]), "ei": float(r[1] or 0), "ef": float(r[2] or 0), "compras": float(r[3] or 0),
+            "fat_financeiro": r[4], "ini": r[5], "fim": r[6]}
+
+@st.cache_data(ttl=120)
+@_retry_db
 def load_fat_semanal(uid, periodo):
     db = conn()
     # Se a unidade tem linhas de API para o período, usa apenas elas (evita dupla contagem com Sheets)
@@ -2197,6 +2215,16 @@ else:
     fat_fonte     = "🟡 banco local"
     fat_fonte_tip = f"API não disponível para {nome_sel} — usando dados importados"
 
+# CMV REAL OFICIAL (fechamento) — mesma fonte da aba Teórico × Real. Quando existe pra
+# unidade/competência, substitui o cálculo do sistema (cmv_resumo) em EI, compras, EF e CMV
+# juntos, pra "EI + Compras − EF = CMV" continuar fechando no resumo abaixo. O % usa o
+# faturamento do PDV (fat_real), o mesmo denominador do teórico.
+_cmv_oficial = load_cmv_real_oficial(uid, periodo)
+if _cmv_oficial:
+    ei_mes, ef_mes = _cmv_oficial["ei"], _cmv_oficial["ef"]
+    comp_mes, cmv_val = _cmv_oficial["compras"], _cmv_oficial["cmv"]
+_tem_cmv = has_cmv or bool(_cmv_oficial)
+
 # Percentuais mensais
 cmv_pct  = cmv_val  / fat_real * 100 if fat_real > 0 else 0.0
 cmc_pct  = comp_mes / fat_real * 100 if fat_real > 0 else 0.0
@@ -2213,6 +2241,14 @@ if periodo_ant:
         comp_ant    = float(t_ant["compras"].iloc[0])
         cmv_pct_ant = float(t_ant["cmv_percentual"].iloc[0])
         cmc_pct_ant = comp_ant / fat_ant * 100 if fat_ant > 0 else 0
+
+if _cmv_oficial:
+    cmv_pct_ant = cmc_pct_ant = None
+    _of_ant = load_cmv_real_oficial(uid, periodo_ant) if periodo_ant else None
+    if _of_ant and _of_ant.get("fat_financeiro"):
+        # aproximação: o mês anterior só tem o faturamento do financeiro (≤0,3 p.p. de diferença do PDV)
+        cmv_pct_ant = 100 * _of_ant["cmv"] / _of_ant["fat_financeiro"]
+        cmc_pct_ant = 100 * _of_ant["compras"] / _of_ant["fat_financeiro"]
 
 def _delta(atual, ant, fmt="{:+.1f}pp", bom_se_menos=True):
     if ant is None: return ""
@@ -2562,21 +2598,23 @@ with c1:
                     f' − EF R${cmv_sem["ef"]:,.0f}')
             kpi("CMV Semana",
                 f"{_cmv_kpi:.1f}%",
-                f"Meta: {META_CMV:.1f}%",
+                f"{META_CMV:.1f}%",
                 _cls_cmv(_cmv_kpi),
                 f'<span style="font-size:.70rem;color:{VI_SUBTXT};">{_det}</span>')
         else:
             # Semana aberta: sem contagem de fechamento
-            kpi("CMV Semana", "—", f"Meta: {META_CMV:.1f}%", "cinza",
+            kpi("CMV Semana", "—", f"{META_CMV:.1f}%", "cinza",
                 '<span style="font-size:.72rem;color:#888">Semana aberta — aguarda próxima contagem</span>')
-    elif has_cmv:
+    elif _tem_cmv:
+        _fonte_cmv = (f'<div style="font-size:.68rem;color:{VI_SUBTXT};margin-top:3px;">'
+                      f'Fechamento oficial · EI + compras − EF</div>') if _cmv_oficial else ""
         kpi("CMV Realizado",
             f"{_cmv_kpi:.1f}%",
-            f"Meta: {META_CMV:.1f}%",
+            f"{META_CMV:.1f}%",
             _cls_cmv(_cmv_kpi),
-            _delta(_cmv_kpi, cmv_pct_ant))
+            _delta(_cmv_kpi, cmv_pct_ant) + _fonte_cmv)
     else:
-        kpi("CMV Realizado", "—", f"Meta: {META_CMV:.1f}%", "cinza",
+        kpi("CMV Realizado", "—", f"{META_CMV:.1f}%", "cinza",
             '<span style="font-size:.72rem;color:#888">Necessita 2 contagens no mês</span>')
 
 with c2:
@@ -2990,7 +3028,7 @@ else:
                 use_container_width=True, hide_index=True, height=340
             )
 
-        if has_cmv:
+        if _tem_cmv:
             excesso_cmv = max(0, cmv_pct - META_CMV)
             excesso_val = excesso_cmv / 100 * fat_real
             cor_brd = COR_BOM if cmv_pct <= META_CMV else COR_CRIT

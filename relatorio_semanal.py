@@ -2240,8 +2240,8 @@ fat_proj = fat_proj_api if fat_proj_api > fat_real * 0.5 else fat_proj_linear
 _usa_proj_api = fat_proj_api > fat_real * 0.5
 
 # ── Abas principais ──────────────────────────────────────────────────────────
-_tab_grupo, _tab_resumo, _tab_compras, _tab_evolucao, _tab_estoque, _tab_vendas, _tab_producao = st.tabs([
-    "📊 Grupo", "📌 Resumo", "🛒 Compras", "📅 Evolução", "📦 Estoque", "🍽️ Vendas", "🍳 Produção",
+_tab_grupo, _tab_resumo, _tab_compras, _tab_evolucao, _tab_estoque, _tab_vendas, _tab_producao, _tab_teorico = st.tabs([
+    "📊 Grupo", "📌 Resumo", "🛒 Compras", "📅 Evolução", "📦 Estoque", "🍽️ Vendas", "🍳 Produção", "🧮 Teórico × Real",
 ])
 _tab_grupo.__enter__()
 
@@ -3529,6 +3529,209 @@ else:
             f'</div>', unsafe_allow_html=True
         )
 _tab_producao.__exit__(None, None, None)
+_tab_teorico.__enter__()
+
+# ════════════════════════════════════════════════════════════════════════════
+# BLOCO 8 — CMV Teórico × Real (barra segmentada)
+# Calculado LOCALMENTE (precisa de Atlas/Cantucci OS) por
+# scripts_analise/gerar_cmv_teorico_real.py e gravado em cmv_teorico_real;
+# esta aba só lê o resultado. Fase 1: IAN, IAS, IAC.
+# ════════════════════════════════════════════════════════════════════════════
+
+_TR_SLUG_CODE = {"asa-norte": "IAN", "asa-sul": "IAS", "aguas-claras": "IAC"}
+_TR_CORES = {"ingredientes": "#0072B2", "sem_ficha": "#0072B2", "embalagens": "#E69F00",
+             "descartaveis": "#009E73", "cancelamentos": "#CC79A7", "descontos": "#D55E00"}
+_TR_TEXTO = {"embalagens": "#1a1a1a", "cancelamentos": "#1a1a1a"}
+_TR_CSS = """
+<style>
+.tr-card{background:__CARD__;color:__TXT__;border-radius:10px;padding:16px 18px;margin-bottom:14px;}
+.tr-head{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;margin-bottom:10px;}
+.tr-un{font-weight:700;font-size:1.05rem;}
+.tr-m{font-size:.8rem;color:__SUB__;} .tr-m b{color:__TXT__;}
+.tr-chip{font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:99px;background:#fbe3df;color:#8a1f12;}
+.tr-line{display:flex;align-items:center;gap:10px;}
+.tr-frame{position:relative;display:flex;height:38px;flex:0 0 auto;}
+.tr-seg{position:relative;height:100%;display:flex;align-items:center;justify-content:center;
+  font-size:.72rem;font-weight:700;cursor:help;min-width:2px;border-right:1px solid rgba(255,255,255,.55);}
+.tr-seg:first-child{border-radius:6px 0 0 6px;}
+.tr-lbl{white-space:nowrap;overflow:hidden;text-shadow:0 0 2px rgba(0,0,0,.25);}
+.tr-gap{height:100%;border:2px dashed #b3261e;border-left:none;border-radius:0 6px 6px 0;background:transparent;box-sizing:border-box;}
+.tr-exc{position:absolute;top:-6px;bottom:-6px;width:0;border-left:3px solid #b3261e;z-index:2;}
+.tr-real{font-weight:700;font-size:.95rem;white-space:nowrap;}
+.tr-tip{display:none;position:absolute;bottom:46px;left:0;z-index:30;min-width:250px;max-width:320px;
+  background:#16222b;color:#f2efe3;padding:10px 12px;border-radius:8px;font-size:.74rem;font-weight:500;
+  line-height:1.45;box-shadow:0 6px 18px rgba(0,0,0,.35);text-shadow:none;white-space:normal;text-align:left;}
+.tr-seg:hover .tr-tip{display:block;}
+.tr-tip hr{border:none;border-top:1px solid #3a4d5a;margin:6px 0;}
+.tr-cap{display:flex;justify-content:flex-end;font-size:.8rem;font-weight:700;margin-top:6px;}
+.tr-cap.bad{color:#b3261e;} .tr-cap.ok{color:__SUB__;}
+.tr-leg{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.78rem;color:__LEG__;margin-top:8px;}
+.tr-leg i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-2px;}
+</style>
+""".replace("__CARD__", VI_CARD).replace("__TXT__", VI_TEXTO).replace("__SUB__", VI_SUBTXT).replace("__LEG__", VI_BRANCO)
+
+
+def _tr_brl(v):
+    return "n/d" if v is None else "R$ " + f"{v:,.0f}".replace(",", ".")
+
+
+def _tr_pct(v, c=1):
+    return "n/d" if v is None else f"{v:.{c}f}".replace(".", ",") + "%"
+
+
+def _tr_pp(v, c=1):
+    return "n/d" if v is None else f"{v:.{c}f}".replace(".", ",") + " p.p."
+
+
+def _tr_data(iso):
+    return datetime.strptime(iso, "%Y-%m-%d").strftime("%d/%m")
+
+
+@st.cache_data(ttl=120)
+@_retry_db
+def load_teorico_real() -> list:
+    """Linhas de cmv_teorico_real (gravadas por gerar_cmv_teorico_real.py), payload já em dict."""
+    db = conn()
+    try:
+        if not db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cmv_teorico_real'").fetchone()[0]:
+            return []
+        rows = db.execute(
+            "SELECT u.slug, t.contagem_ini, t.contagem_fim, t.payload FROM cmv_teorico_real t "
+            "JOIN unidades u ON u.id=t.unidade_id ORDER BY t.contagem_fim DESC, u.nome").fetchall()
+    finally:
+        db.close()
+    return [{"slug": s, "ini": i, "fim": f, "r": json.loads(p)} for s, i, f, p in rows]
+
+
+def _tr_barra(r, escala):
+    """HTML de uma barra: segmentos proporcionais em p.p. do faturamento; vazio tracejado = gap."""
+    b, real = r["barra"], (r.get("real") or {}).get("pct")
+    soma = b["soma_segmentos_pp"]
+    frame_pp = max(soma, real or 0) or 1
+    partes = []
+    for s in r["segmentos"]:
+        w = 100 * s["pp_barra"] / frame_pp
+        cor = _TR_CORES[s["id"]]
+        txt = _TR_TEXTO.get(s["id"], "#fff")
+        fundo = (f"background:repeating-linear-gradient(45deg,{cor} 0 6px,rgba(255,255,255,.5) 6px 12px);"
+                 if s["id"] == "sem_ficha" else f"background:{cor};")
+        top = "".join(f"{i['nome']}: {_tr_brl(i['rs'])}<br>" for i in s["top5"]) or "—"
+        if s["id"] == "descontos":
+            top = f"Descontos concedidos no período ({_tr_brl(s.get('desconto_total_rs'))}):<br>" + top
+        tip = (f"<b>{s['nome']}</b><br>{_tr_brl(s['rs'])} · {_tr_pp(s['pp_barra'], 2)} na barra<br>"
+               f"{_tr_pct(s['pct_do_real'])} do CMV real<hr>{top}")
+        lbl = _tr_pp(s["pp_barra"]).replace(" p.p.", "") if (w >= 6 and s["id"] != "sem_ficha") else ""
+        partes.append(f'<div class="tr-seg" style="width:{w:.3f}%;{fundo}color:{txt}">'
+                      f'<span class="tr-lbl">{lbl}</span><div class="tr-tip">{tip}</div></div>')
+    gap = b.get("gap_pp")
+    if gap is not None and gap > 0:
+        partes.append(f'<div class="tr-gap" style="width:{100 * gap / frame_pp:.3f}%"></div>')
+    elif gap is not None and gap < 0 and real:
+        partes.append(f'<div class="tr-exc" style="left:{100 * real / frame_pp:.3f}%"></div>')
+    largura = 100 * frame_pp / escala
+    real_txt = f'<span class="tr-real">{_tr_pct(real)}</span>' if real is not None else '<span class="tr-real">real n/d</span>'
+    if gap is None:
+        cap = '<div class="tr-cap ok">CMV real n/d neste período — mostrando só o teórico</div>'
+    elif gap >= 0:
+        cap = f'<div class="tr-cap bad" style="width:{largura:.2f}%">⬚ Gap não explicado: {_tr_pp(gap)} ({_tr_brl(b["gap_rs"])})</div>'
+    else:
+        cap = (f'<div class="tr-cap bad" style="width:{largura:.2f}%">▲ Excesso: teórico passa o real em {_tr_pp(-gap)} '
+               f'({_tr_brl(-b["gap_rs"])}) — conferir contagem/ficha</div>')
+    return (f'<div class="tr-line"><div class="tr-frame" style="width:{largura:.3f}%">{"".join(partes)}</div>{real_txt}</div>{cap}')
+
+
+secao("🧮 CMV Teórico × Real")
+
+_tr_linhas = load_teorico_real()
+if not _tr_linhas:
+    st.info("Ainda não há resultado calculado. O cálculo roda localmente (precisa do Atlas e do Cantucci OS): "
+            "`python -I scripts_analise/gerar_cmv_teorico_real.py --ini AAAA-MM-DD --fim AAAA-MM-DD` "
+            "e depois publicar o banco.")
+else:
+    _tr_periodos = sorted({(x["ini"], x["fim"]) for x in _tr_linhas}, key=lambda p: p[1], reverse=True)
+    _tr_rot = {p: f"{_tr_data(p[0])} → {_tr_data(p[1])}  (vendas {_tr_data(p[0])}–"
+                  f"{(datetime.strptime(p[1], '%Y-%m-%d') - timedelta(days=1)).strftime('%d/%m')})" for p in _tr_periodos}
+    _c1, _c2 = st.columns([3, 1])
+    with _c1:
+        _tr_sel = st.selectbox("Período (entre duas contagens)", _tr_periodos, format_func=lambda p: _tr_rot[p], key="tr_periodo")
+    with _c2:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        if st.button("🔄 Recarregar", key="tr_reload", help="Relê o banco. Para RECALCULAR com dados novos, rode o script local e publique o banco."):
+            load_teorico_real.clear()
+            st.rerun()
+
+    _tr_do_periodo = [x for x in _tr_linhas if (x["ini"], x["fim"]) == _tr_sel]
+    _tr_do_periodo.sort(key=lambda x: ["IAN", "IAS", "IAC"].index(_TR_SLUG_CODE.get(x["slug"], "IAC")))
+    _tr_escala = max(max(x["r"]["barra"]["soma_segmentos_pp"], (x["r"].get("real") or {}).get("pct") or 0)
+                     for x in _tr_do_periodo) * 1.04
+
+    st.markdown(_TR_CSS, unsafe_allow_html=True)
+    for x in _tr_do_periodo:
+        r = x["r"]; b = r["barra"]; t = r["teorico"]; real = r.get("real")
+        chip = '<span class="tr-chip">BAIXA CONFIANÇA</span>' if r["baixa_confianca"] else ""
+        cab = (f'<div class="tr-head"><span class="tr-un">{r["unidade"]}</span>'
+               f'<span class="tr-m">Faturamento <b>{_tr_brl(r["faturamento"]["liquido_pdv"])}</b></span>'
+               f'<span class="tr-m">Cobertura de ficha <b>{_tr_pct(r["cobertura_pct"])}</b></span>{chip}'
+               f'<span class="tr-m">Teórico cheio <b>{_tr_pct(t["cheio_pct"])}</b></span>'
+               f'<span class="tr-m">CMV real <b>{_tr_pct(real["pct"]) if real else "n/d"}</b></span>'
+               f'<span class="tr-m">Gap <b>{_tr_pp(b["gap_pp"]) if b["gap_pp"] is not None else "n/d"}'
+               f'{" (" + _tr_brl(b["gap_rs"]) + ")" if b["gap_rs"] is not None else ""}</b></span></div>')
+        st.markdown(f'<div class="tr-card">{cab}{_tr_barra(r, _tr_escala)}</div>', unsafe_allow_html=True)
+
+    leg = "".join(
+        f'<span><i style="background:{("repeating-linear-gradient(45deg,#0072B2 0 3px,rgba(255,255,255,.55) 3px 6px)" if sid == "sem_ficha" else _TR_CORES[sid])}"></i>{nome}</span>'
+        for sid, nome in [("ingredientes", "Ingredientes das fichas"), ("sem_ficha", "Itens sem ficha (extrapolado)"),
+                          ("embalagens", "Embalagens"), ("descartaveis", "Descartáveis e consumo fora de ficha"),
+                          ("cancelamentos", "Cancelamentos com desperdício"), ("descontos", "Efeito dos descontos")])
+    st.markdown(f'<div class="tr-leg">{leg}<span><i style="border:2px dashed #b3261e;background:transparent"></i>Gap não explicado</span></div>',
+                unsafe_allow_html=True)
+    st.caption("Escala comum entre as unidades (largura = % do faturamento líquido). O faturamento do PDV já é depois do desconto; "
+               "por isso os segmentos aparecem em preço cheio e o desconto é a diferença — a soma é o teórico total. "
+               "Passe o mouse num segmento para ver os 5 maiores itens.")
+
+    # ── Detalhamento ─────────────────────────────────────────────────────────
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+    _d1, _d2 = st.columns(2)
+    _tr_cods = [x["r"]["unidade"] for x in _tr_do_periodo]
+    with _d1:
+        _tr_u = st.selectbox("Unidade (detalhe)", _tr_cods, key="tr_unid")
+    _tr_r = next(x["r"] for x in _tr_do_periodo if x["r"]["unidade"] == _tr_u)
+    with _d2:
+        _tr_s = st.selectbox("Segmento (detalhe)", [s["id"] for s in _tr_r["segmentos"]], key="tr_seg",
+                             format_func=lambda sid: next(s["nome"] for s in _tr_r["segmentos"] if s["id"] == sid))
+    _tr_seg = next(s for s in _tr_r["segmentos"] if s["id"] == _tr_s)
+    st.markdown(f"**{_tr_seg['nome']}** — {_tr_brl(_tr_seg['rs'])} · {_tr_pp(_tr_seg['pp_barra'], 2)} na barra · "
+                f"{_tr_pct(_tr_seg['pct_do_real'])} do CMV real")
+    if _tr_seg["itens"]:
+        _col = {"nome": "Item", "item": "Item", "sku": "SKU", "qtd": "Qtd", "custo_unit": "Custo unit.", "custo": "Custo (R$)",
+                "regra": "Regra", "classificacao": "Situação", "faturamento": "Faturamento (R$)", "desconto_rs": "Desconto (R$)",
+                "qtd_periodo": "Qtd no período", "preco_embalagem": "Preço embalagem", "regime": "Regime", "metodo": "Método",
+                "valor_cancelado": "Valor cancelado (R$)"}
+        _tr_df = pd.DataFrame(_tr_seg["itens"])
+        _tr_df = _tr_df.rename(columns={k: v for k, v in _col.items() if k in _tr_df.columns})
+        _tr_df = _tr_df.loc[:, ~_tr_df.columns.duplicated()]
+        st.dataframe(_tr_df, use_container_width=True, hide_index=True)
+        st.download_button("⬇️ Baixar Excel", df_to_excel_bytes(_tr_df, sheet_name="Teorico_x_Real"),
+                           file_name=f"teorico_x_real_{_tr_u}_{_tr_sel[0]}_{_tr_sel[1]}_{_tr_s}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key=f"tr_xlsx_{_tr_u}_{_tr_s}")
+    else:
+        st.info("Sem itens neste segmento.")
+
+    # ── Pendências ───────────────────────────────────────────────────────────
+    _tr_pend = _tr_r.get("pendencias") or []
+    with st.expander(f"⚠️ Pendências que reduzem a confiança — {_tr_u} ({len(_tr_pend)})", expanded=_tr_r["baixa_confianca"]):
+        if not _tr_pend:
+            st.success("Nenhuma pendência registrada.")
+        for p in _tr_pend:
+            afet = (f" — {_tr_brl(p['faturamento_afetado'])} ({_tr_pct(p['pct_faturamento'])} do faturamento)"
+                    if p.get("faturamento_afetado") is not None else "")
+            st.markdown(f"**{p['titulo']}**{afet}")
+            if p.get("itens"):
+                st.dataframe(pd.DataFrame(p["itens"]), use_container_width=True, hide_index=True)
+    st.caption(f"Calculado em {datetime.fromisoformat(_tr_r['calculado_em']).strftime('%d/%m/%Y %H:%M')} · "
+               f"CMV real: {(_tr_r.get('real') or {}).get('fonte', 'n/d').replace('_', ' ')} · "
+               f"Fase 1: só IAN, IAS e IAC (Koji/Mané/SQN entram quando a cobertura de ficha for suficiente).")
+_tab_teorico.__exit__(None, None, None)
 
 # ── Rodapé ────────────────────────────────────────────────────────────────────
 

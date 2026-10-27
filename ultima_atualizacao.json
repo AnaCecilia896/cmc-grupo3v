@@ -1,8 +1,9 @@
 {
-  "inicio": "2026-10-27 14:21:31",
-  "pid": 19792,
+  "inicio": "2026-10-27 16:27:38",
+  "pid": 10788,
   "periodos": [
-    "2026-10"
+    "2026-10",
+    "2026-09"
   ],
   "em_andamento": true,
   "periodos_detalhes": {}

@@ -1040,6 +1040,26 @@ def _semanas_mes(periodo: str) -> tuple[int, int]:
     return max(dec, 1), max(total, 1)
 
 
+def _limite_quadro(uid, ef):
+    """
+    Limite superior (exclusivo) da janela do quadro de compras.
+    Mês fechado (EF = inventário mensal): o próprio EF.
+    Mês aberto (EF = última contagem semanal): vai até hoje, inclusive — se
+    parasse na contagem, Fat. Real e Compras Mês congelavam na última
+    contagem de cada unidade e ficavam menores que a coluna da semana.
+    """
+    db = conn()
+    try:
+        fechado = db.execute(
+            "SELECT 1 FROM contagens WHERE unidade_id=? AND data=? "
+            "AND tipo='inventario_mensal' LIMIT 1", (uid, ef)).fetchone()
+    finally:
+        db.close()
+    if fechado:
+        return ef
+    return max(ef, (date.today() + timedelta(days=1)).isoformat())
+
+
 @st.cache_data(ttl=120)
 @_retry_db
 def load_quadro_compras(periodo: str,
@@ -1075,6 +1095,8 @@ def load_quadro_compras(periodo: str,
         # calendário — uma compra/venda no dia do fechamento (ex.: 31/08 quando
         # o inventário de fechamento de agosto é 01/09) cai no mês correto.
         _ei_u, _ef_u = load_ei_ef_mes(uid_u, periodo)
+        if _ei_u and _ef_u:
+            _ef_u = _limite_quadro(uid_u, _ef_u)
 
         if _ei_u and _ef_u:
             comp_mes = _q(

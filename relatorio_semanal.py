@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 from config import DB_FILE
+from janelas import fim_vivo as _fim_vivo, fat_janela as _fat_janela, compras_janela as _compras_janela
 from classificar import classificar as _classificar_codigo, CATS_OPERACIONAIS
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
@@ -807,8 +808,9 @@ def load_compras_mes(uid, periodo):
     """Retorna apenas compras CONFERIDAS (efetivas) do mês, excluindo categorias
     operacionais. Usa a janela EI/EF do inventário (mesma regra do CMV) em vez
     do mês calendário, para que uma compra no dia do fechamento caia no mês
-    correto."""
-    ei_data, ef_data = load_ei_ef_mes(uid, periodo)
+    correto. Em mês aberto a janela vai até hoje (janela_viva), não só até a
+    última contagem."""
+    ei_data, _ef_cmv, ef_data = janela_viva(uid, periodo)
     db = conn()
     if ei_data and ef_data:
         df = pd.read_sql(
@@ -833,8 +835,8 @@ def load_compras_mes(uid, periodo):
 @_retry_db
 def load_em_transito_mes(uid, periodo) -> float:
     """Retorna o valor total em trânsito (realizado/confirmado, não conferido) do mês,
-    usando a mesma janela EI/EF do CMV."""
-    ei_data, ef_data = load_ei_ef_mes(uid, periodo)
+    usando a mesma janela viva dos demais números do mês."""
+    ei_data, _ef_cmv, ef_data = janela_viva(uid, periodo)
     db = conn()
     if ei_data and ef_data:
         r = db.execute(
@@ -1040,24 +1042,21 @@ def _semanas_mes(periodo: str) -> tuple[int, int]:
     return max(dec, 1), max(total, 1)
 
 
-def _limite_quadro(uid, ef):
+def janela_viva(uid, periodo):
     """
-    Limite superior (exclusivo) da janela do quadro de compras.
-    Mês fechado (EF = inventário mensal): o próprio EF.
-    Mês aberto (EF = última contagem semanal): vai até hoje, inclusive — se
-    parasse na contagem, Fat. Real e Compras Mês congelavam na última
-    contagem de cada unidade e ficavam menores que a coluna da semana.
+    (ei, ef, fim_vivo) do mês. `ef` é a data da última contagem (só até ela
+    existe CMV); `fim_vivo` é o limite exclusivo de faturamento, compras e CMC:
+    hoje, em mês aberto; o próprio EF, em mês fechado. Toda aba lê o mês por
+    aqui (ver janelas.py) para os números baterem entre Grupo, Resumo e Compras.
     """
+    ei, ef = load_ei_ef_mes(uid, periodo)
+    if not (ei and ef):
+        return ei, ef, None
     db = conn()
     try:
-        fechado = db.execute(
-            "SELECT 1 FROM contagens WHERE unidade_id=? AND data=? "
-            "AND tipo='inventario_mensal' LIMIT 1", (uid, ef)).fetchone()
+        return ei, ef, _fim_vivo(db, uid, ef)
     finally:
         db.close()
-    if fechado:
-        return ef
-    return max(ef, (date.today() + timedelta(days=1)).isoformat())
 
 
 @st.cache_data(ttl=120)
@@ -1094,30 +1093,12 @@ def load_quadro_compras(periodo: str,
         # Usa a janela EI/EF do inventário (mesma regra do CMV), não o mês
         # calendário — uma compra/venda no dia do fechamento (ex.: 31/08 quando
         # o inventário de fechamento de agosto é 01/09) cai no mês correto.
-        _ei_u, _ef_u = load_ei_ef_mes(uid_u, periodo)
-        if _ei_u and _ef_u:
-            _ef_u = _limite_quadro(uid_u, _ef_u)
+        _ei_u, _ef_cmv_u, _ef_u = janela_viva(uid_u, periodo)
 
         if _ei_u and _ef_u:
-            comp_mes = _q(
-                f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
-                f"WHERE unidade_id=? AND data>=? AND data<? "
-                f"AND (status_pedido='conferido' OR status_pedido IS NULL) {_SQL_EXCL_OP}",
-                (uid_u, _ei_u, _ef_u))
-            em_trans_mes = _q(
-                f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
-                f"WHERE unidade_id=? AND data>=? AND data<? "
-                f"AND status_pedido='em_transito' {_SQL_EXCL_OP}",
-                (uid_u, _ei_u, _ef_u))
-            has_api_mes = _q(
-                "SELECT COUNT(*) FROM vendas_produtos "
-                "WHERE unidade_id=? AND data_inicio>=? AND data_inicio<? AND produto='Faturamento (API)'",
-                (uid_u, _ei_u, _ef_u)) > 0
-            fat_mes_filter = "AND produto='Faturamento (API)'" if has_api_mes else "AND produto!='Faturamento (API)'"
-            fat_mes = _q(
-                f"SELECT COALESCE(SUM(valor_total),0) FROM vendas_produtos "
-                f"WHERE unidade_id=? AND data_inicio>=? AND data_inicio<? AND tipo='VENDA' {fat_mes_filter}",
-                (uid_u, _ei_u, _ef_u))
+            comp_mes     = _compras_janela(db, uid_u, _ei_u, _ef_u)
+            em_trans_mes = _compras_janela(db, uid_u, _ei_u, _ef_u, status="em_transito")
+            fat_mes      = _fat_janela(db, uid_u, _ei_u, _ef_u)
         else:
             comp_mes = _q(
                 f"SELECT COALESCE(SUM(valor_total),0) FROM compras "
@@ -2194,7 +2175,10 @@ else:
 
 # Linha TOTAL do CMV
 total = df_cmv[df_cmv["categoria"] == "TOTAL"]
-cats  = df_cmv[df_cmv["categoria"] != "TOTAL"]
+# Operacionais (Limpeza / Alim. Funcionários) ficam fora do TOTAL do CMV e têm
+# bloco próprio no Resumo — também fora da lista por categoria, senão a soma
+# da lista passa do TOTAL (4–5%).
+cats  = df_cmv[(df_cmv["categoria"] != "TOTAL") & (~df_cmv["categoria"].isin(CATS_OPERACIONAIS))]
 
 has_cmv = not total.empty
 
@@ -2220,22 +2204,33 @@ else:
     fat_db = float(_fat_row[0]) if _fat_row else 0.0
     _ei_data_mes, _ef_data_mes = load_ei_ef_mes(uid, periodo)
 
-# API de faturamento em tempo real — para todas as unidades com loja mapeada
-if LOJA_POR_SLUG.get(SLUG_SEL):
-    with st.spinner("Buscando faturamento atualizado…"):
-        api_data = fetch_fat_api(periodo, SLUG_SEL, _ei_data_mes, _ef_data_mes)
-    if api_data and api_data["total"] > 0:
-        fat_real      = api_data["total"]
-        fat_fonte     = "🟢 ao vivo"
-        fat_fonte_tip = "Faturamento buscado em tempo real de cantuccidados.com.br"
-    else:
-        fat_real      = fat_db
-        fat_fonte     = "🟡 banco local"
-        fat_fonte_tip = "API indisponível — usando dados importados do banco local"
+# Faturamento do mês — MESMA fonte e janela das demais abas (vendas_produtos,
+# atualizada pelo pipeline; ver janelas.py). Antes a aba buscava a API ao vivo só
+# até a última contagem, e por isso parava de crescer e divergia do Grupo.
+#   fat_cmv  = até a última contagem (denominador do CMV, que só existe até lá)
+#   fat_real = até hoje (faturamento, CMC e projeção)
+_ei_data_mes, _ef_data_mes, _ef_viva = janela_viva(uid, periodo)
+if _ei_data_mes and _ef_data_mes and _ef_viva:
+    _db_fat = conn()
+    try:
+        fat_cmv  = _fat_janela(_db_fat, uid, _ei_data_mes, _ef_data_mes)
+        fat_real = _fat_janela(_db_fat, uid, _ei_data_mes, _ef_viva)
+        comp_vivo = _compras_janela(_db_fat, uid, _ei_data_mes, _ef_viva)
+    finally:
+        _db_fat.close()
+    fat_cmv = fat_cmv or fat_db
 else:
-    fat_real      = fat_db
-    fat_fonte     = "🟡 banco local"
-    fat_fonte_tip = f"API não disponível para {nome_sel} — usando dados importados"
+    fat_cmv, fat_real, comp_vivo = fat_db, fat_db, None
+fat_fonte     = "🟢 banco (pipeline)"
+fat_fonte_tip = "Faturamento e compras do banco, atualizados pelo pipeline a cada ~3h"
+if fat_real <= 0 and LOJA_POR_SLUG.get(SLUG_SEL):
+    # Sem dado no banco para a janela: última saída é a API ao vivo.
+    with st.spinner("Buscando faturamento na API…"):
+        api_data = fetch_fat_api(periodo, SLUG_SEL, _ei_data_mes, _ef_viva or _ef_data_mes)
+    if api_data and api_data["total"] > 0:
+        fat_real = fat_cmv = api_data["total"]
+        fat_fonte     = "🟡 API ao vivo"
+        fat_fonte_tip = "Sem faturamento no banco para o período — buscado em cantuccidados.com.br"
 
 # CMV REAL OFICIAL (fechamento) — mesma fonte da aba Teórico × Real. Quando existe pra
 # unidade/competência, substitui o cálculo do sistema (cmv_resumo) em EI, compras, EF e CMV
@@ -2246,10 +2241,13 @@ if _cmv_oficial:
     ei_mes, ef_mes = _cmv_oficial["ei"], _cmv_oficial["ef"]
     comp_mes, cmv_val = _cmv_oficial["compras"], _cmv_oficial["cmv"]
 _tem_cmv = has_cmv or bool(_cmv_oficial)
+if _cmv_oficial or comp_vivo is None:
+    comp_vivo = comp_mes     # fechamento oficial / sem janela: CMC usa a mesma compra do CMV
+_mes_aberto = bool(_ef_viva and _ef_data_mes and _ef_viva != _ef_data_mes)
 
-# Percentuais mensais
-cmv_pct  = cmv_val  / fat_real * 100 if fat_real > 0 else 0.0
-cmc_pct  = comp_mes / fat_real * 100 if fat_real > 0 else 0.0
+# Percentuais mensais: CMV até a última contagem; faturamento e CMC até hoje.
+cmv_pct  = cmv_val   / fat_cmv  * 100 if fat_cmv  > 0 else 0.0
+cmc_pct  = comp_vivo / fat_real * 100 if fat_real > 0 else 0.0
 
 # Período anterior (tendência)
 idx_per     = periodos.index(periodo)
@@ -2284,8 +2282,11 @@ def _delta(atual, ant, fmt="{:+.1f}pp", bom_se_menos=True):
 ano_p, mes_p = int(periodo[:4]), int(periodo[5:7])
 dias_mes = calendar.monthrange(ano_p, mes_p)[1]
 if not df_fat_sem.empty:
-    ultima_venda   = datetime.strptime(df_fat_sem["data_fim"].max(), "%Y-%m-%d").date()
-    dias_com_venda = (ultima_venda - date(ano_p, mes_p, 1)).days + 1
+    # A última semana vai até o domingo (data_fim no futuro): conta só até hoje,
+    # e a partir do início da janela do mês (EI), igual ao faturamento somado.
+    ultima_venda   = min(datetime.strptime(df_fat_sem["data_fim"].max(), "%Y-%m-%d").date(), date.today())
+    _ini_janela    = date.fromisoformat(_ei_data_mes) if _ei_data_mes else date(ano_p, mes_p, 1)
+    dias_com_venda = max((ultima_venda - _ini_janela).days + 1, 1)
 else:
     dias_com_venda = 1
 fat_proj_linear = fat_real / dias_com_venda * dias_mes if dias_com_venda > 0 else fat_real
@@ -2598,7 +2599,7 @@ if kpis_sem and semana_filtro:
     _escopo = "semana"
 else:
     _fat_kpi  = fat_real
-    _comp_kpi = comp_mes
+    _comp_kpi = comp_vivo
     _et_kpi   = em_transito_mes
     _cmv_kpi  = cmv_pct
     _cmc_kpi  = cmc_pct
@@ -2609,6 +2610,15 @@ else:
 _unid_label = _nome_locked if (_unit_lock and _unit_lock in _slug_para_nome) else nome_sel
 secao(f"📌 Indicadores — {_unid_label} · {_periodo_label}  "
       f"<span title='{fat_fonte_tip}' style='font-size:.75rem;font-weight:400;opacity:.8;cursor:help'>{fat_fonte}</span>")
+
+if _escopo == "mes" and _ei_data_mes and _ef_viva:
+    _fmt_d = lambda iso: datetime.strptime(iso, "%Y-%m-%d").strftime("%d/%m")
+    _ate_hoje = (date.fromisoformat(_ef_viva) - timedelta(days=1))
+    st.caption(
+        f"Faturamento, compras e CMC: {_fmt_d(_ei_data_mes)} a {_ate_hoje.strftime('%d/%m')}"
+        + (f"  ·  CMV: até a contagem de {_fmt_d(_ef_data_mes)} (só existe CMV até a última contagem)"
+           if _mes_aberto else "")
+    )
 
 c1, c2, c3, c4 = st.columns(4)
 
@@ -2630,6 +2640,9 @@ with c1:
     elif _tem_cmv:
         _fonte_cmv = (f'<div style="font-size:.68rem;color:{VI_SUBTXT};margin-top:3px;">'
                       f'Fechamento oficial · EI + compras − EF</div>') if _cmv_oficial else ""
+        if _mes_aberto and not _cmv_oficial:
+            _fonte_cmv = (f'<div style="font-size:.68rem;color:{VI_SUBTXT};margin-top:3px;">'
+                          f'Até a contagem de {datetime.strptime(_ef_data_mes, "%Y-%m-%d").strftime("%d/%m")}</div>')
         kpi("CMV Realizado",
             f"{_cmv_kpi:.1f}%",
             f"{META_CMV:.1f}%",
@@ -2668,11 +2681,11 @@ with c3:
         kpi(f"Faturamento{' (semana)' if _escopo=='semana' else ''}",
             f"R$ {_fat_kpi:,.0f}", f"R$ {META_FAT:,.0f}",
             _cls_fat_dyn(_fat_kpi, META_FAT),
-            _delta(_fat_kpi, fat_ant, "R$ {:+,.0f}", bom_se_menos=False) if _escopo == "mes" else "")
+            _delta(_fat_kpi, fat_ant, "R$ {:,.0f}", bom_se_menos=False) if (_escopo == "mes" and not _mes_aberto) else "")
     else:
         kpi(f"Faturamento{' (semana)' if _escopo=='semana' else ''}",
             f"R$ {_fat_kpi:,.0f}", "sem meta cadastrada", "atencao",
-            _delta(_fat_kpi, fat_ant, "R$ {:+,.0f}", bom_se_menos=False) if _escopo == "mes" else "")
+            _delta(_fat_kpi, fat_ant, "R$ {:,.0f}", bom_se_menos=False) if (_escopo == "mes" and not _mes_aberto) else "")
 
 with c4:
     if _escopo == "semana":
@@ -2706,6 +2719,10 @@ with c4:
 _ano_op, _mes_op = int(periodo[:4]), int(periodo[5:7])
 _op_ini = f"{periodo}-01"
 _op_fim = f"{periodo}-{calendar.monthrange(_ano_op, _mes_op)[1]:02d}"
+if _ei_data_mes and _ef_viva:
+    # mesma janela do faturamento e das compras do mês (fim exclusivo → -1 dia)
+    _op_ini = _ei_data_mes
+    _op_fim = (date.fromisoformat(_ef_viva) - timedelta(days=1)).isoformat()
 if semana_filtro:
     _op_ini = semana_filtro[0]
     _op_fim = semana_filtro[1]
@@ -3052,7 +3069,7 @@ else:
 
         if _tem_cmv:
             excesso_cmv = max(0, cmv_pct - META_CMV)
-            excesso_val = excesso_cmv / 100 * fat_real
+            excesso_val = excesso_cmv / 100 * fat_cmv
             cor_brd = COR_BOM if cmv_pct <= META_CMV else COR_CRIT
             st.markdown(f"""
             <div style="background:{VI_CARD};border-radius:8px;padding:12px 18px;

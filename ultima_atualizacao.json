@@ -5,6 +5,88 @@
     "2026-11",
     "2026-10"
   ],
-  "em_andamento": true,
-  "periodos_detalhes": {}
+  "em_andamento": false,
+  "periodos_detalhes": {
+    "2026-11": {
+      "atlas": {
+        "ok": 6,
+        "erros": [],
+        "timestamp": "2026-11-17 12:03:04"
+      },
+      "contagens": {
+        "ok": true,
+        "inseridos": 0,
+        "atualizados": 0,
+        "erros": [],
+        "timestamp": "2026-11-17 12:04:44"
+      },
+      "faturamento": {
+        "ok": true,
+        "timestamp": "2026-11-17 12:05:30"
+      },
+      "produtos": {
+        "ok": true,
+        "linhas": 2599,
+        "timestamp": "2026-11-17 12:06:02"
+      },
+      "cancelamentos": {
+        "ok": true,
+        "linhas": 1648,
+        "timestamp": "2026-11-17 12:06:14"
+      },
+      "custos_receitas": {
+        "ok": true,
+        "calculados": 60,
+        "timestamp": "2026-11-17 12:06:35"
+      },
+      "cmv": {
+        "ok": true,
+        "timestamp": "2026-11-17 12:08:21"
+      }
+    },
+    "2026-10": {
+      "atlas": {
+        "ok": 6,
+        "erros": [],
+        "timestamp": "2026-11-17 12:09:34"
+      },
+      "contagens": {
+        "ok": true,
+        "inseridos": 0,
+        "atualizados": 0,
+        "erros": [],
+        "timestamp": "2026-11-17 12:11:45"
+      },
+      "faturamento": {
+        "ok": true,
+        "timestamp": "2026-11-17 12:12:51"
+      },
+      "produtos": {
+        "ok": true,
+        "linhas": 5091,
+        "timestamp": "2026-11-17 12:13:44"
+      },
+      "cancelamentos": {
+        "ok": true,
+        "linhas": 2869,
+        "timestamp": "2026-11-17 12:14:00"
+      },
+      "custos_receitas": {
+        "ok": true,
+        "calculados": 60,
+        "timestamp": "2026-11-17 12:14:18"
+      },
+      "cmv": {
+        "ok": true,
+        "timestamp": "2026-11-17 12:15:58"
+      }
+    }
+  },
+  "git_push": {
+    "ok": true,
+    "timestamp": "2026-11-17 12:16:22"
+  },
+  "fim": "2026-11-17 12:16:22",
+  "duracao_segundos": 865.5,
+  "sucesso": true
 }
